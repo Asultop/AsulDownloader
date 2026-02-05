@@ -8,23 +8,25 @@
 
 // ==================== AsulMultiDownloader 实现 ====================
 
-AsulMultiDownloader::AsulMultiDownloader(QObject *parent)
+  AsulMultiDownloader::AsulMultiDownloader(QObject *parent)
     : QObject(parent)
-    , m_maxConcurrentDownloads(16)  // 优化：从8提升到16，参考PCL最佳实践
-    , m_largeFileThreshold(10 * 1024 * 1024)  // 10MB
-    , m_segmentCount(4)
-    , m_maxConnectionsPerHost(8)  // 优化：从6提升到8
+    , m_maxConcurrentDownloads(512)
+    , m_largeFileThreshold(10 * 1024 * 1024)
+    , m_segmentCount(8)
+    , m_maxConnectionsPerHost(512)
     , m_downloadTimeout(30000)
     , m_autoRetry(true)
     , m_maxRetryCount(3)
     , m_activeDownloads(0)
     , m_taskIdCounter(0)
     , m_speedMonitoringEnabled(true)
-    , m_speedThreshold(256 * 1024)  // 256KB/s，参考PCL
+    , m_speedThreshold(256 * 1024)
     , m_lastSpeedCheck(0)
     , m_lastBytesDownloaded(0)
+    , m_monitorLastTime(0)
+    , m_monitorLastBytes(0)
     , m_allFinishedEmitted(false)
-    , m_networkManagerPoolSize(8)  // 创建8个共享的网络管理器
+    , m_networkManagerPoolSize(32)  // 优化：使用32个网络管理器，分散负载并增加总连接数限制
 {
     // 初始化网络管理器池
     for (int i = 0; i < m_networkManagerPoolSize; ++i) {
@@ -1247,24 +1249,26 @@ qint64 AsulMultiDownloader::calculateCurrentSpeed()
     qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
     qint64 currentBytes = m_statistics.totalDownloaded;
     
-    if (m_lastSpeedCheck == 0) {
-        m_lastSpeedCheck = currentTime;
-        m_lastBytesDownloaded = currentBytes;
+    if (m_monitorLastTime == 0) {
+        m_monitorLastTime = currentTime;
+        m_monitorLastBytes = currentBytes;
         return 0;
     }
     
-    qint64 timeDiff = currentTime - m_lastSpeedCheck;
+    qint64 timeDiff = currentTime - m_monitorLastTime;
     if (timeDiff < 100) {  // 至少间隔100ms
         return 0;
     }
     
-    qint64 bytesDiff = currentBytes - m_lastBytesDownloaded;
+    qint64 bytesDiff = currentBytes - m_monitorLastBytes;
+    if (bytesDiff < 0) bytesDiff = 0; // 防止回绕
+    
     qint64 speed = (bytesDiff * 1000) / timeDiff;  // 字节/秒
     
     // 更新上次检查的值（每秒更新一次）
     if (timeDiff >= 1000) {
-        m_lastSpeedCheck = currentTime;
-        m_lastBytesDownloaded = currentBytes;
+        m_monitorLastTime = currentTime;
+        m_monitorLastBytes = currentBytes;
     }
     
     return speed;
@@ -1286,7 +1290,8 @@ bool AsulMultiDownloader::shouldDisableMultiThread(const QUrl &url) const
 
 QNetworkAccessManager* AsulMultiDownloader::getNetworkManager()
 {
-    QMutexLocker locker(&m_mutex);
+    // Fix: Remove mutex lock to avoid recursive locking deadlock
+    // m_networkManagers is read-only after constructor, so this is safe
     
     if (m_networkManagers.isEmpty()) {
         return nullptr;

@@ -43,10 +43,15 @@ int main(int argc, char *argv[])
     AsulMultiDownloader downloader;
     
     // Configure downloader for optimal performance
-    // 优化：增加并发数，利用共享网络管理器池提升性能
-    downloader.setMaxConcurrentDownloads(32);  // 32个并发下载，平衡性能和资源
+    // 优化：极大幅增加并发数，针对小文件下载，突破TCP/HTTP延迟瓶颈
+    downloader.setMaxConcurrentDownloads(512);  // 512并发
+    downloader.setMaxConnectionsPerHost(512);   // 允许针对同一CDN建立大量连接
     downloader.setLargeFileThreshold(10 * 1024 * 1024);  // 10MB threshold
-    downloader.setSegmentCountForLargeFile(4);  // 4 segments for large files
+    downloader.setSegmentCountForLargeFile(8);  // 8 segments for large files
+    
+    qDebug() << "Concurrency Config:";
+    qDebug() << "  Max Concurrent:" << downloader.maxConcurrentDownloads();
+    qDebug() << "  Max Conn/Host:" << downloader.maxConnectionsPerHost();
     
     // Track completion
     int totalTasks = 0;

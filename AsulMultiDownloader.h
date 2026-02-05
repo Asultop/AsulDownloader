@@ -444,8 +444,13 @@ private:
     // PCL优化参数
     bool m_speedMonitoringEnabled;       // 速度监控开关
     qint64 m_speedThreshold;             // 速度阈值（256KB/s）
-    qint64 m_lastSpeedCheck;             // 上次速度检查时间
-    qint64 m_lastBytesDownloaded;        // 上次下载字节数
+    qint64 m_lastSpeedCheck;             // 上次速度检查时间（用于UI统计）
+    qint64 m_lastBytesDownloaded;        // 上次下载字节数（用于UI统计）
+    
+    // 独立的监控线程速度计算状态
+    qint64 m_monitorLastTime;            // 上次监控检查时间
+    qint64 m_monitorLastBytes;           // 上次监控下载字节数
+    
     QStringList m_noMultiThreadHosts;    // 禁用多线程的域名列表
     
     // 任务管理
