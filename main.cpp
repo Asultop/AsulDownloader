@@ -29,8 +29,8 @@
 #include <QTimer>
 #include "AsulMultiDownloader.h"
 
-void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &assetsJsonPath);
-void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &versionJsonPath);
+void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &assetsJsonPath, qint64 *totalBytes = nullptr);
+void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &versionJsonPath, qint64 *totalBytes = nullptr);
 
 int main(int argc, char *argv[])
 {
@@ -51,6 +51,7 @@ int main(int argc, char *argv[])
     int totalTasks = 0;
     int completedTasks = 0;
     int failedTasks = 0;
+    qint64 totalBytes = 0;  // Total bytes to download
     
     // Connect signals to track progress
     QObject::connect(&downloader, &AsulMultiDownloader::downloadFinished,
@@ -70,16 +71,30 @@ int main(int argc, char *argv[])
         qWarning() << QString("[FAILED] Task %1: %2").arg(taskId).arg(errorString);
     });
     
-    // Add statistics reporting every 5 seconds
+    // Add statistics reporting every 500ms
     QTimer *statsTimer = new QTimer(&a);
     QObject::connect(statsTimer, &QTimer::timeout, [&]() {
         DownloadStatistics stats = downloader.getStatistics();
-        qDebug() << QString("\n[STATS] Active: %1 | Queued: %2 | Completed: %3 | Failed: %4 | Speed: %5 KB/s")
-                    .arg(stats.activeDownloads)
-                    .arg(stats.queuedDownloads)
-                    .arg(completedTasks)
-                    .arg(failedTasks)
-                    .arg(stats.totalDownloadSpeed / 1024);
+        
+        // Calculate downloaded file count (completed + failed)
+        int downloadedFiles = completedTasks + failedTasks;
+        
+        // Calculate downloading file count (active downloads)
+        int downloadingFiles = stats.activeDownloads;
+        
+        // Get downloaded bytes
+        qint64 downloadedBytes = stats.totalDownloaded;
+        
+        // Calculate speed in MB/s
+        double speedMBps = stats.totalDownloadSpeed / (1024.0 * 1024.0);
+        
+        qDebug() << QString("[PROGRESS] %1 | %2 | %3 | %4 MB | %5 MB | Speed: %6 MB/s")
+                    .arg(downloadedFiles)
+                    .arg(downloadingFiles)
+                    .arg(totalTasks)
+                    .arg(downloadedBytes / (1024.0 * 1024.0), 0, 'f', 2)
+                    .arg(totalBytes / (1024.0 * 1024.0), 0, 'f', 2)
+                    .arg(speedMBps, 0, 'f', 2);
     });
     
     QObject::connect(&downloader, &AsulMultiDownloader::allDownloadsFinished,
@@ -102,7 +117,7 @@ int main(int argc, char *argv[])
         qWarning() << "Current directory:" << QDir::currentPath();
         return 1;
     }
-    parseAndDownloadAssets(&downloader, "assets.json");
+    parseAndDownloadAssets(&downloader, "assets.json", &totalBytes);
     
     // Parse and download version files
     qDebug() << "\nParsing version.json...";
@@ -113,11 +128,12 @@ int main(int argc, char *argv[])
         qWarning() << "Current directory:" << QDir::currentPath();
         return 1;
     }
-    parseAndDownloadVersion(&downloader, "version.json");
+    parseAndDownloadVersion(&downloader, "version.json", &totalBytes);
     
     // Get total task count
     totalTasks = downloader.getAllTaskIds().count();
     qDebug() << QString("\nTotal tasks added: %1").arg(totalTasks);
+    qDebug() << QString("Total size: %1 MB").arg(totalBytes / (1024.0 * 1024.0), 0, 'f', 2);
     
     if (totalTasks == 0) {
         qDebug() << "All files are already downloaded. Nothing to do.";
@@ -126,12 +142,12 @@ int main(int argc, char *argv[])
     }
     
     qDebug() << "Starting downloads...\n";
-    statsTimer->start(5000);  // Start stats timer (report every 5 seconds)
+    statsTimer->start(500);  // Start stats timer (report every 500ms)
 
     return a.exec();
 }
 
-void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &assetsJsonPath)
+void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &assetsJsonPath, qint64 *totalBytes)
 {
     // Read assets.json
     QFile file(assetsJsonPath);
@@ -188,12 +204,17 @@ void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &asse
         // Priority: 0 = low (assets), 5 = medium (libraries), 10 = high (client.jar)
         downloader->addDownload(QUrl(url), localPath, 0);
         count++;
+        
+        // Add to total bytes
+        if (totalBytes && size > 0) {
+            *totalBytes += size;
+        }
     }
     
     qDebug() << QString("Added %1 new asset download tasks").arg(count);
 }
 
-void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &versionJsonPath)
+void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &versionJsonPath, qint64 *totalBytes)
 {
     // Read version.json
     QFile file(versionJsonPath);
@@ -233,6 +254,11 @@ void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &ver
         if (!fileInfo.exists() || fileInfo.size() != clientSize) {
             downloader->addDownload(QUrl(clientUrl), jarPath, 10);  // Higher priority
             qDebug() << QString("Added client.jar download: %1").arg(versionId);
+            
+            // Add to total bytes
+            if (totalBytes && clientSize > 0) {
+                *totalBytes += clientSize;
+            }
         }
     }
     
@@ -286,6 +312,11 @@ void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &ver
         // Add download task
         downloader->addDownload(QUrl(url), localPath, 5);  // Medium priority
         libCount++;
+        
+        // Add to total bytes
+        if (totalBytes && size > 0) {
+            *totalBytes += size;
+        }
     }
     
     qDebug() << QString("Added %1 new library download tasks").arg(libCount);
