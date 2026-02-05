@@ -415,6 +415,9 @@ private slots:
     void onUpdateStatistics();
     void onMonitorDownloads();  // 新增：监控线程，参考PCL
     
+    // Allow DownloadTask to access private methods
+    friend class DownloadTask;
+
 private:
     // 内部方法
     void processQueue();
@@ -425,6 +428,7 @@ private:
     bool canStartDownload(const QString &host) const;
     bool shouldDisableMultiThread(const QUrl &url) const;  // 新增：域名策略检查
     qint64 calculateCurrentSpeed();  // 新增：计算当前速度
+    void checkAndEmitAllFinished();  // 检查是否所有任务完成并发射信号
     
     // 配置参数
     int m_maxConcurrentDownloads;
@@ -456,6 +460,7 @@ private:
     DownloadStatistics m_statistics;
     QTimer *m_statisticsTimer;
     QTimer *m_monitorTimer;              // 新增：监控定时器
+    bool m_allFinishedEmitted;           // 防止重复发射完成信号
     
     // 线程安全
     mutable QMutex m_mutex;

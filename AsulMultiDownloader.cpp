@@ -22,6 +22,7 @@ AsulMultiDownloader::AsulMultiDownloader(QObject *parent)
     , m_speedThreshold(256 * 1024)  // 256KB/s，参考PCL
     , m_lastSpeedCheck(0)
     , m_lastBytesDownloaded(0)
+    , m_allFinishedEmitted(false)
 {
     m_statisticsTimer = new QTimer(this);
     connect(m_statisticsTimer, &QTimer::timeout, this, &AsulMultiDownloader::onUpdateStatistics);
@@ -449,17 +450,7 @@ void AsulMultiDownloader::onTaskFinished(const QString &taskId)
     processQueue();
     
     // 检查是否所有任务都完成了
-    bool allFinished = true;
-    for (auto status : m_taskStatus) {
-        if (status == DownloadStatus::Queued || status == DownloadStatus::Downloading) {
-            allFinished = false;
-            break;
-        }
-    }
-    
-    if (allFinished && m_taskQueue.isEmpty()) {
-        emit allDownloadsFinished();
-    }
+    checkAndEmitAllFinished();
 }
 
 void AsulMultiDownloader::onTaskFailed(const QString &taskId, const QString &error)
@@ -490,6 +481,9 @@ void AsulMultiDownloader::onTaskFailed(const QString &taskId, const QString &err
         emit downloadFailed(taskId, error);
         
         processQueue();
+        
+        // 检查是否所有任务都完成了（包括失败的任务）
+        checkAndEmitAllFinished();
     }
 }
 
@@ -1222,4 +1216,32 @@ bool AsulMultiDownloader::shouldDisableMultiThread(const QUrl &url) const
     }
     
     return false;
+}
+
+void AsulMultiDownloader::checkAndEmitAllFinished()
+{
+    // 注意：调用此方法时应已持有锁
+    
+    // 检查是否所有任务都完成了（包括成功和失败的任务）
+    bool allFinished = true;
+    for (auto status : m_taskStatus) {
+        if (status == DownloadStatus::Queued || status == DownloadStatus::Downloading) {
+            allFinished = false;
+            break;
+        }
+    }
+    
+    if (allFinished && m_taskQueue.isEmpty() && !m_allFinishedEmitted) {
+        m_allFinishedEmitted = true;
+        
+        // Stop timers to allow event loop to exit
+        if (m_statisticsTimer) {
+            m_statisticsTimer->stop();
+        }
+        if (m_monitorTimer) {
+            m_monitorTimer->stop();
+        }
+        
+        emit allDownloadsFinished();
+    }
 }
