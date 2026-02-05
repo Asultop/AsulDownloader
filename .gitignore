@@ -1,0 +1,52 @@
+# Build directories
+build/
+build-*/
+
+# Qt Creator files
+*.user
+*.autosave
+*.pro.user
+*.pro.user.*
+
+# Compiled Object files
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Executables
+*.exe
+*.out
+*.app
+AsulDownloader
+
+# Qt generated files
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+
+# Minecraft downloaded files (optional - remove if you want to commit them)
+minecraft/
+
+# CMake
+CMakeLists.txt.user*
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# IDE specific
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak

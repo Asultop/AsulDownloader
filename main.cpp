@@ -1,3 +1,22 @@
+/**
+ * AsulDownloader - Minecraft Asset and Version Downloader
+ * 
+ * This application parses Minecraft's assets.json and version.json files
+ * and downloads all required files using the high-performance AsulMultiDownloader.
+ * 
+ * Features:
+ * - Parallel download of thousands of asset files
+ * - Download client.jar and rename to {version}.jar
+ * - Download all library files with proper directory structure
+ * - Skip already downloaded files (resume capability)
+ * - Real-time progress statistics
+ * 
+ * Directory structure:
+ * - Assets: ./minecraft/assets/objects/{first 2 chars of hash}/{hash}
+ * - Client: ./minecraft/versions/{version}/{version}.jar
+ * - Libraries: ./minecraft/libraries/{path from version.json}
+ */
+
 #include <QCoreApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -6,6 +25,7 @@
 #include <QDir>
 #include <QDebug>
 #include <QUrl>
+#include <QTimer>
 #include "AsulMultiDownloader.h"
 
 void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &assetsJsonPath);
@@ -35,23 +55,40 @@ int main(int argc, char *argv[])
     QObject::connect(&downloader, &AsulMultiDownloader::downloadFinished,
                      [&](const QString &taskId, const QString &savePath) {
         completedTasks++;
-        qDebug() << QString("Completed (%1/%2): %3")
-                    .arg(completedTasks)
-                    .arg(totalTasks)
-                    .arg(QFileInfo(savePath).fileName());
+        if (completedTasks % 100 == 0 || completedTasks == totalTasks) {
+            qDebug() << QString("[%1/%2] Completed: %3")
+                        .arg(completedTasks)
+                        .arg(totalTasks)
+                        .arg(QFileInfo(savePath).fileName());
+        }
     });
     
     QObject::connect(&downloader, &AsulMultiDownloader::downloadFailed,
                      [&](const QString &taskId, const QString &errorString) {
         failedTasks++;
-        qDebug() << "Failed:" << errorString;
+        qWarning() << QString("[FAILED] Task %1: %2").arg(taskId).arg(errorString);
     });
     
+    // Add statistics reporting every 5 seconds
+    QTimer *statsTimer = new QTimer(&a);
+    QObject::connect(statsTimer, &QTimer::timeout, [&]() {
+        DownloadStatistics stats = downloader.getStatistics();
+        qDebug() << QString("\n[STATS] Active: %1 | Queued: %2 | Completed: %3 | Failed: %4 | Speed: %5 KB/s")
+                    .arg(stats.activeDownloads)
+                    .arg(stats.queuedDownloads)
+                    .arg(completedTasks)
+                    .arg(failedTasks)
+                    .arg(stats.totalDownloadSpeed / 1024);
+    });
+    statsTimer->start(5000);  // Report every 5 seconds
+    
     QObject::connect(&downloader, &AsulMultiDownloader::allDownloadsFinished,
-                     [&]() {
+                     [&, statsTimer]() {
+        statsTimer->stop();
         qDebug() << "\n========================================================";
         qDebug() << "All downloads finished!";
-        qDebug() << QString("Completed: %1, Failed: %2").arg(completedTasks).arg(failedTasks);
+        qDebug() << QString("Completed: %1, Failed: %2, Total: %3")
+                    .arg(completedTasks).arg(failedTasks).arg(totalTasks);
         qDebug() << "========================================================";
         QCoreApplication::quit();
     });
@@ -67,7 +104,15 @@ int main(int argc, char *argv[])
     // Get total task count
     totalTasks = downloader.getAllTaskIds().count();
     qDebug() << QString("\nTotal tasks added: %1").arg(totalTasks);
+    
+    if (totalTasks == 0) {
+        qDebug() << "All files are already downloaded. Nothing to do.";
+        qDebug() << "========================================================";
+        return 0;
+    }
+    
     qDebug() << "Starting downloads...\n";
+    statsTimer->start();  // Start stats timer
 
     return a.exec();
 }
