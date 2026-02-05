@@ -23,15 +23,23 @@ AsulMultiDownloader::AsulMultiDownloader(QObject *parent)
     , m_lastSpeedCheck(0)
     , m_lastBytesDownloaded(0)
     , m_allFinishedEmitted(false)
+    , m_networkManagerPoolSize(8)  // 创建8个共享的网络管理器
 {
+    // 初始化网络管理器池
+    for (int i = 0; i < m_networkManagerPoolSize; ++i) {
+        QNetworkAccessManager *manager = new QNetworkAccessManager(this);
+        m_networkManagers.append(manager);
+    }
+    
     m_statisticsTimer = new QTimer(this);
     connect(m_statisticsTimer, &QTimer::timeout, this, &AsulMultiDownloader::onUpdateStatistics);
     m_statisticsTimer->start(1000);  // 每秒更新一次统计信息
     
     // 启动监控线程，用于动态线程调度（参考PCL）
+    // 优化：降低监控频率从20ms到1000ms，减少系统负载
     m_monitorTimer = new QTimer(this);
     connect(m_monitorTimer, &QTimer::timeout, this, &AsulMultiDownloader::onMonitorDownloads);
-    m_monitorTimer->start(20);  // 每20ms检查一次，参考PCL
+    m_monitorTimer->start(1000);  // 每秒检查一次，大幅降低频率
     
     // 初始化域名策略（参考PCL对特定域名的优化）
     m_noMultiThreadHosts << "bmclapi" << "github.com" << "modrinth.com" 
@@ -506,6 +514,30 @@ void AsulMultiDownloader::onUpdateStatistics()
     }
     m_statistics.totalDownloaded = totalDownloaded;
     
+    // 计算下载速度（使用移动平均）
+    qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+    if (m_lastSpeedCheck > 0) {
+        qint64 timeDiff = currentTime - m_lastSpeedCheck;
+        if (timeDiff >= 1000) {  // 至少1秒
+            qint64 bytesDiff = totalDownloaded - m_lastBytesDownloaded;
+            // 计算速度（字节/秒）
+            m_statistics.totalDownloadSpeed = (bytesDiff * 1000) / timeDiff;
+            
+            // 限制最大速度显示（避免显示不合理的高速度）
+            // 假设最大速度为1GB/s
+            if (m_statistics.totalDownloadSpeed > 1024 * 1024 * 1024) {
+                m_statistics.totalDownloadSpeed = 0;  // 重置异常值
+            }
+            
+            m_lastSpeedCheck = currentTime;
+            m_lastBytesDownloaded = totalDownloaded;
+        }
+    } else {
+        m_lastSpeedCheck = currentTime;
+        m_lastBytesDownloaded = totalDownloaded;
+        m_statistics.totalDownloadSpeed = 0;
+    }
+    
     emit statisticsChanged(m_statistics);
 }
 
@@ -597,11 +629,21 @@ DownloadTask::DownloadTask(const QString &taskId, const QUrl &url,
     , m_networkManager(nullptr)
     , m_reply(nullptr)
     , m_file(nullptr)
+    , m_ownsNetworkManager(false)
     , m_completedSegments(0)
     , m_isPaused(false)
     , m_isCanceled(false)
 {
-    m_networkManager = new QNetworkAccessManager(this);
+    // 从父对象（AsulMultiDownloader）获取共享的网络管理器
+    AsulMultiDownloader *downloader = qobject_cast<AsulMultiDownloader*>(parent);
+    if (downloader) {
+        m_networkManager = downloader->getNetworkManager();
+        m_ownsNetworkManager = false;
+    } else {
+        // 如果无法获取，创建自己的（兜底方案）
+        m_networkManager = new QNetworkAccessManager(this);
+        m_ownsNetworkManager = true;
+    }
 }
 
 DownloadTask::~DownloadTask()
@@ -612,6 +654,15 @@ DownloadTask::~DownloadTask()
         m_file->close();
         delete m_file;
         m_file = nullptr;
+    }
+    
+    // 释放网络管理器（如果拥有的话）
+    if (m_ownsNetworkManager && m_networkManager) {
+        AsulMultiDownloader *downloader = qobject_cast<AsulMultiDownloader*>(parent());
+        if (downloader) {
+            downloader->releaseNetworkManager(m_networkManager);
+        }
+        // 如果是自己创建的，会在QObject析构时自动删除
     }
 }
 
@@ -1010,14 +1061,41 @@ SegmentDownloader::SegmentDownloader(int index, const QUrl &url, const QString &
     , m_networkManager(nullptr)
     , m_reply(nullptr)
     , m_file(nullptr)
+    , m_ownsNetworkManager(false)
     , m_isCanceled(false)
 {
-    m_networkManager = new QNetworkAccessManager(this);
+    // 尝试从DownloadTask的父对象（AsulMultiDownloader）获取共享的网络管理器
+    DownloadTask *task = qobject_cast<DownloadTask*>(parent);
+    if (task) {
+        AsulMultiDownloader *downloader = qobject_cast<AsulMultiDownloader*>(task->parent());
+        if (downloader) {
+            m_networkManager = downloader->getNetworkManager();
+            m_ownsNetworkManager = false;
+        }
+    }
+    
+    // 如果无法获取，创建自己的（兜底方案）
+    if (!m_networkManager) {
+        m_networkManager = new QNetworkAccessManager(this);
+        m_ownsNetworkManager = true;
+    }
 }
 
 SegmentDownloader::~SegmentDownloader()
 {
     cancel();
+    
+    // 释放网络管理器（如果拥有的话）
+    if (m_ownsNetworkManager && m_networkManager) {
+        DownloadTask *task = qobject_cast<DownloadTask*>(parent());
+        if (task) {
+            AsulMultiDownloader *downloader = qobject_cast<AsulMultiDownloader*>(task->parent());
+            if (downloader) {
+                downloader->releaseNetworkManager(m_networkManager);
+            }
+        }
+        // 如果是自己创建的，会在QObject析构时自动删除
+    }
 }
 
 void SegmentDownloader::start()
@@ -1216,6 +1294,29 @@ bool AsulMultiDownloader::shouldDisableMultiThread(const QUrl &url) const
     }
     
     return false;
+}
+
+QNetworkAccessManager* AsulMultiDownloader::getNetworkManager()
+{
+    QMutexLocker locker(&m_mutex);
+    
+    // 从池中返回一个可用的网络管理器
+    // 简单实现：轮询分配
+    static int index = 0;
+    if (m_networkManagers.isEmpty()) {
+        return nullptr;
+    }
+    
+    QNetworkAccessManager *manager = m_networkManagers[index % m_networkManagers.size()];
+    index++;
+    return manager;
+}
+
+void AsulMultiDownloader::releaseNetworkManager(QNetworkAccessManager* manager)
+{
+    // 当前实现中，网络管理器是共享的，不需要释放
+    // 只是用于将来可能的扩展
+    Q_UNUSED(manager);
 }
 
 void AsulMultiDownloader::checkAndEmitAllFinished()

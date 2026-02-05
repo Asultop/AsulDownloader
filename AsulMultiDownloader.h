@@ -417,6 +417,7 @@ private slots:
     
     // Allow DownloadTask to access private methods
     friend class DownloadTask;
+    friend class SegmentDownloader;
 
 private:
     // 内部方法
@@ -429,6 +430,8 @@ private:
     bool shouldDisableMultiThread(const QUrl &url) const;  // 新增：域名策略检查
     qint64 calculateCurrentSpeed();  // 新增：计算当前速度
     void checkAndEmitAllFinished();  // 检查是否所有任务完成并发射信号
+    QNetworkAccessManager* getNetworkManager();  // 获取共享的网络管理器
+    void releaseNetworkManager(QNetworkAccessManager* manager);  // 释放网络管理器
     
     // 配置参数
     int m_maxConcurrentDownloads;
@@ -455,6 +458,8 @@ private:
     // 线程和网络管理
     QHash<QString, int> m_hostConnections;  // Host -> 当前连接数
     int m_activeDownloads;
+    QList<QNetworkAccessManager*> m_networkManagers;  // 共享的网络管理器池
+    int m_networkManagerPoolSize;                      // 网络管理器池大小
     
     // 统计信息
     DownloadStatistics m_statistics;
@@ -535,9 +540,10 @@ private:
     int m_segmentCount;
     QString m_errorString;
     
-    QNetworkAccessManager *m_networkManager;
+    QNetworkAccessManager *m_networkManager;  // 从池中借用的网络管理器
     QNetworkReply *m_reply;
     QFile *m_file;
+    bool m_ownsNetworkManager;  // 是否拥有网络管理器（需要释放）
     
     // 分段下载相关
     QList<SegmentDownloader*> m_segments;
@@ -586,9 +592,10 @@ private:
     qint64 m_bytesReceived;
     int m_timeout;
     
-    QNetworkAccessManager *m_networkManager;
+    QNetworkAccessManager *m_networkManager;  // 从池中借用的网络管理器
     QNetworkReply *m_reply;
     QFile *m_file;
+    bool m_ownsNetworkManager;  // 是否拥有网络管理器（需要释放）
     
     bool m_isCanceled;
 };

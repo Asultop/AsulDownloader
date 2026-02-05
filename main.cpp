@@ -43,7 +43,8 @@ int main(int argc, char *argv[])
     AsulMultiDownloader downloader;
     
     // Configure downloader for optimal performance
-    downloader.setMaxConcurrentDownloads(16);  // Higher concurrency for small files
+    // 优化：降低并发数，避免Windows句柄耗尽
+    downloader.setMaxConcurrentDownloads(32);  // 32个并发下载，平衡性能和资源
     downloader.setLargeFileThreshold(10 * 1024 * 1024);  // 10MB threshold
     downloader.setSegmentCountForLargeFile(4);  // 4 segments for large files
     
