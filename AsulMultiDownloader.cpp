@@ -22,6 +22,7 @@ AsulMultiDownloader::AsulMultiDownloader(QObject *parent)
     , m_speedThreshold(256 * 1024)  // 256KB/s，参考PCL
     , m_lastSpeedCheck(0)
     , m_lastBytesDownloaded(0)
+    , m_allFinishedEmitted(false)
 {
     m_statisticsTimer = new QTimer(this);
     connect(m_statisticsTimer, &QTimer::timeout, this, &AsulMultiDownloader::onUpdateStatistics);
@@ -457,7 +458,8 @@ void AsulMultiDownloader::onTaskFinished(const QString &taskId)
         }
     }
     
-    if (allFinished && m_taskQueue.isEmpty()) {
+    if (allFinished && m_taskQueue.isEmpty() && !m_allFinishedEmitted) {
+        m_allFinishedEmitted = true;
         emit allDownloadsFinished();
     }
 }
@@ -490,6 +492,20 @@ void AsulMultiDownloader::onTaskFailed(const QString &taskId, const QString &err
         emit downloadFailed(taskId, error);
         
         processQueue();
+        
+        // 检查是否所有任务都完成了（包括失败的任务）
+        bool allFinished = true;
+        for (auto status : m_taskStatus) {
+            if (status == DownloadStatus::Queued || status == DownloadStatus::Downloading) {
+                allFinished = false;
+                break;
+            }
+        }
+        
+        if (allFinished && m_taskQueue.isEmpty() && !m_allFinishedEmitted) {
+            m_allFinishedEmitted = true;
+            emit allDownloadsFinished();
+        }
     }
 }
 

@@ -415,6 +415,9 @@ private slots:
     void onUpdateStatistics();
     void onMonitorDownloads();  // 新增：监控线程，参考PCL
     
+    // Allow DownloadTask to access private methods
+    friend class DownloadTask;
+
 private:
     // 内部方法
     void processQueue();
@@ -456,6 +459,7 @@ private:
     DownloadStatistics m_statistics;
     QTimer *m_statisticsTimer;
     QTimer *m_monitorTimer;              // 新增：监控定时器
+    bool m_allFinishedEmitted;           // 防止重复发射完成信号
     
     // 线程安全
     mutable QMutex m_mutex;
