@@ -460,6 +460,15 @@ void AsulMultiDownloader::onTaskFinished(const QString &taskId)
     
     if (allFinished && m_taskQueue.isEmpty() && !m_allFinishedEmitted) {
         m_allFinishedEmitted = true;
+        
+        // Stop timers to allow event loop to exit
+        if (m_statisticsTimer) {
+            m_statisticsTimer->stop();
+        }
+        if (m_monitorTimer) {
+            m_monitorTimer->stop();
+        }
+        
         emit allDownloadsFinished();
     }
 }
@@ -504,6 +513,15 @@ void AsulMultiDownloader::onTaskFailed(const QString &taskId, const QString &err
         
         if (allFinished && m_taskQueue.isEmpty() && !m_allFinishedEmitted) {
             m_allFinishedEmitted = true;
+            
+            // Stop timers to allow event loop to exit
+            if (m_statisticsTimer) {
+                m_statisticsTimer->stop();
+            }
+            if (m_monitorTimer) {
+                m_monitorTimer->stop();
+            }
+            
             emit allDownloadsFinished();
         }
     }
