@@ -22,6 +22,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QDebug>
 #include <QUrl>
@@ -80,7 +81,6 @@ int main(int argc, char *argv[])
                     .arg(failedTasks)
                     .arg(stats.totalDownloadSpeed / 1024);
     });
-    statsTimer->start(5000);  // Report every 5 seconds
     
     QObject::connect(&downloader, &AsulMultiDownloader::allDownloadsFinished,
                      [&, statsTimer]() {
@@ -95,10 +95,24 @@ int main(int argc, char *argv[])
     
     // Parse and download assets
     qDebug() << "\nParsing assets.json...";
+    QFileInfo assetsFile("assets.json");
+    if (!assetsFile.exists()) {
+        qWarning() << "ERROR: assets.json not found!";
+        qWarning() << "Please place assets.json in the same directory as the executable.";
+        qWarning() << "Current directory:" << QDir::currentPath();
+        return 1;
+    }
     parseAndDownloadAssets(&downloader, "assets.json");
     
     // Parse and download version files
     qDebug() << "\nParsing version.json...";
+    QFileInfo versionFile("version.json");
+    if (!versionFile.exists()) {
+        qWarning() << "ERROR: version.json not found!";
+        qWarning() << "Please place version.json in the same directory as the executable.";
+        qWarning() << "Current directory:" << QDir::currentPath();
+        return 1;
+    }
     parseAndDownloadVersion(&downloader, "version.json");
     
     // Get total task count
@@ -112,7 +126,7 @@ int main(int argc, char *argv[])
     }
     
     qDebug() << "Starting downloads...\n";
-    statsTimer->start();  // Start stats timer
+    statsTimer->start(5000);  // Start stats timer (report every 5 seconds)
 
     return a.exec();
 }
@@ -170,7 +184,8 @@ void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &asse
             continue;  // Skip already downloaded files
         }
         
-        // Add download task
+        // Add download task with low priority (0) for assets
+        // Priority: 0 = low (assets), 5 = medium (libraries), 10 = high (client.jar)
         downloader->addDownload(QUrl(url), localPath, 0);
         count++;
     }
@@ -233,8 +248,10 @@ void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &ver
         
         // Check if library has rules (platform-specific)
         if (lib.contains("rules")) {
-            // For simplicity, skip platform-specific libraries for now
-            // In a full implementation, you would check the rules
+            // Skip platform-specific libraries for cross-platform compatibility
+            // In a full implementation, you would parse the rules to determine
+            // if the library is needed for the current platform (Windows/Linux/macOS)
+            // TODO: Implement rule checking for platform-specific libraries
             continue;
         }
         
