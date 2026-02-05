@@ -1,9 +1,0 @@
-C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/AsulDownloader.dir
-C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/edit_cache.dir
-C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/rebuild_cache.dir
-C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/list_install_components.dir
-C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/install.dir
-C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/install/local.dir
-C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/install/strip.dir
-C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/AsulDownloader_autogen_timestamp_deps.dir
-C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/AsulDownloader_autogen.dir
