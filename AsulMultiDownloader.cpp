@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QRandomGenerator>
 #include <QDebug>
+#include <atomic>
 
 // ==================== AsulMultiDownloader 实现 ====================
 
@@ -656,14 +657,9 @@ DownloadTask::~DownloadTask()
         m_file = nullptr;
     }
     
-    // 释放网络管理器（如果拥有的话）
-    if (m_ownsNetworkManager && m_networkManager) {
-        AsulMultiDownloader *downloader = qobject_cast<AsulMultiDownloader*>(parent());
-        if (downloader) {
-            downloader->releaseNetworkManager(m_networkManager);
-        }
-        // 如果是自己创建的，会在QObject析构时自动删除
-    }
+    // 注意：不需要显式释放网络管理器
+    // - 如果是从池中借用的（m_ownsNetworkManager == false），池会一直持有这些管理器
+    // - 如果是自己创建的（m_ownsNetworkManager == true），Qt的父子关系会自动删除
 }
 
 void DownloadTask::start()
@@ -1085,17 +1081,9 @@ SegmentDownloader::~SegmentDownloader()
 {
     cancel();
     
-    // 释放网络管理器（如果拥有的话）
-    if (m_ownsNetworkManager && m_networkManager) {
-        DownloadTask *task = qobject_cast<DownloadTask*>(parent());
-        if (task) {
-            AsulMultiDownloader *downloader = qobject_cast<AsulMultiDownloader*>(task->parent());
-            if (downloader) {
-                downloader->releaseNetworkManager(m_networkManager);
-            }
-        }
-        // 如果是自己创建的，会在QObject析构时自动删除
-    }
+    // 注意：不需要显式释放网络管理器
+    // - 如果是从池中借用的（m_ownsNetworkManager == false），池会一直持有这些管理器
+    // - 如果是自己创建的（m_ownsNetworkManager == true），Qt的父子关系会自动删除
 }
 
 void SegmentDownloader::start()
@@ -1301,14 +1289,13 @@ QNetworkAccessManager* AsulMultiDownloader::getNetworkManager()
     QMutexLocker locker(&m_mutex);
     
     // 从池中返回一个可用的网络管理器
-    // 简单实现：轮询分配
-    static int index = 0;
+    // 使用thread-safe的轮询分配
+    static std::atomic<int> index{0};
     if (m_networkManagers.isEmpty()) {
         return nullptr;
     }
     
-    QNetworkAccessManager *manager = m_networkManagers[index % m_networkManagers.size()];
-    index++;
+    QNetworkAccessManager *manager = m_networkManagers[index.fetch_add(1) % m_networkManagers.size()];
     return manager;
 }
 
