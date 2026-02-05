@@ -428,6 +428,7 @@ private:
     bool canStartDownload(const QString &host) const;
     bool shouldDisableMultiThread(const QUrl &url) const;  // 新增：域名策略检查
     qint64 calculateCurrentSpeed();  // 新增：计算当前速度
+    void checkAndEmitAllFinished();  // 检查是否所有任务完成并发射信号
     
     // 配置参数
     int m_maxConcurrentDownloads;
