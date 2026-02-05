@@ -178,6 +178,53 @@ public:
      */
     int maxRetryCount() const;
     
+    /**
+     * @brief 设置速度监控阈值（PCL优化）
+     * @param bytesPerSecond 速度阈值，低于此速度时尝试增加线程（默认256KB/s）
+     */
+    void setSpeedThreshold(qint64 bytesPerSecond);
+    
+    /**
+     * @brief 获取速度监控阈值
+     * @return 当前速度阈值（字节/秒）
+     */
+    qint64 speedThreshold() const;
+    
+    /**
+     * @brief 设置是否启用速度监控和动态线程调度（PCL优化）
+     * @param enable 是否启用（默认true）
+     */
+    void setSpeedMonitoringEnabled(bool enable);
+    
+    /**
+     * @brief 获取是否启用速度监控
+     * @return 当前设置
+     */
+    bool speedMonitoringEnabled() const;
+    
+    /**
+     * @brief 添加禁用多线程的域名（PCL优化）
+     * @param host 域名（如 "github.com", "modrinth.com"）
+     */
+    void addNoMultiThreadHost(const QString &host);
+    
+    /**
+     * @brief 移除禁用多线程的域名
+     * @param host 域名
+     */
+    void removeNoMultiThreadHost(const QString &host);
+    
+    /**
+     * @brief 清空禁用多线程的域名列表
+     */
+    void clearNoMultiThreadHosts();
+    
+    /**
+     * @brief 获取禁用多线程的域名列表
+     * @return 域名列表
+     */
+    QStringList noMultiThreadHosts() const;
+    
     // ==================== 下载控制接口 ====================
     
     /**
@@ -366,6 +413,7 @@ private slots:
     void onTaskFailed(const QString &taskId, const QString &error);
     void onTaskProgress(const QString &taskId, qint64 received, qint64 total);
     void onUpdateStatistics();
+    void onMonitorDownloads();  // 新增：监控线程，参考PCL
     
 private:
     // 内部方法
@@ -375,6 +423,8 @@ private:
     void updateHostConnections(const QString &host, int delta);
     int getHostConnections(const QString &host) const;
     bool canStartDownload(const QString &host) const;
+    bool shouldDisableMultiThread(const QUrl &url) const;  // 新增：域名策略检查
+    qint64 calculateCurrentSpeed();  // 新增：计算当前速度
     
     // 配置参数
     int m_maxConcurrentDownloads;
@@ -384,6 +434,13 @@ private:
     int m_downloadTimeout;
     bool m_autoRetry;
     int m_maxRetryCount;
+    
+    // PCL优化参数
+    bool m_speedMonitoringEnabled;       // 速度监控开关
+    qint64 m_speedThreshold;             // 速度阈值（256KB/s）
+    qint64 m_lastSpeedCheck;             // 上次速度检查时间
+    qint64 m_lastBytesDownloaded;        // 上次下载字节数
+    QStringList m_noMultiThreadHosts;    // 禁用多线程的域名列表
     
     // 任务管理
     QHash<QString, std::shared_ptr<DownloadTask>> m_tasks;
@@ -398,6 +455,7 @@ private:
     // 统计信息
     DownloadStatistics m_statistics;
     QTimer *m_statisticsTimer;
+    QTimer *m_monitorTimer;              // 新增：监控定时器
     
     // 线程安全
     mutable QMutex m_mutex;

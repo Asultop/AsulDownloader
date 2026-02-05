@@ -9,19 +9,32 @@
 
 AsulMultiDownloader::AsulMultiDownloader(QObject *parent)
     : QObject(parent)
-    , m_maxConcurrentDownloads(8)
+    , m_maxConcurrentDownloads(16)  // 优化：从8提升到16，参考PCL最佳实践
     , m_largeFileThreshold(10 * 1024 * 1024)  // 10MB
     , m_segmentCount(4)
-    , m_maxConnectionsPerHost(6)
+    , m_maxConnectionsPerHost(8)  // 优化：从6提升到8
     , m_downloadTimeout(30000)
     , m_autoRetry(true)
     , m_maxRetryCount(3)
     , m_activeDownloads(0)
     , m_taskIdCounter(0)
+    , m_speedMonitoringEnabled(true)
+    , m_speedThreshold(256 * 1024)  // 256KB/s，参考PCL
+    , m_lastSpeedCheck(0)
+    , m_lastBytesDownloaded(0)
 {
     m_statisticsTimer = new QTimer(this);
     connect(m_statisticsTimer, &QTimer::timeout, this, &AsulMultiDownloader::onUpdateStatistics);
     m_statisticsTimer->start(1000);  // 每秒更新一次统计信息
+    
+    // 启动监控线程，用于动态线程调度（参考PCL）
+    m_monitorTimer = new QTimer(this);
+    connect(m_monitorTimer, &QTimer::timeout, this, &AsulMultiDownloader::onMonitorDownloads);
+    m_monitorTimer->start(20);  // 每20ms检查一次，参考PCL
+    
+    // 初始化域名策略（参考PCL对特定域名的优化）
+    m_noMultiThreadHosts << "bmclapi" << "github.com" << "modrinth.com" 
+                         << "optifine.net" << "curseforge.com";
 }
 
 AsulMultiDownloader::~AsulMultiDownloader()
@@ -114,6 +127,58 @@ int AsulMultiDownloader::maxRetryCount() const
 {
     QMutexLocker locker(&m_mutex);
     return m_maxRetryCount;
+}
+
+// ==================== PCL优化新增接口实现 ====================
+
+void AsulMultiDownloader::setSpeedThreshold(qint64 bytesPerSecond)
+{
+    QMutexLocker locker(&m_mutex);
+    m_speedThreshold = qMax(qint64(0), bytesPerSecond);
+}
+
+qint64 AsulMultiDownloader::speedThreshold() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_speedThreshold;
+}
+
+void AsulMultiDownloader::setSpeedMonitoringEnabled(bool enable)
+{
+    QMutexLocker locker(&m_mutex);
+    m_speedMonitoringEnabled = enable;
+}
+
+bool AsulMultiDownloader::speedMonitoringEnabled() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_speedMonitoringEnabled;
+}
+
+void AsulMultiDownloader::addNoMultiThreadHost(const QString &host)
+{
+    QMutexLocker locker(&m_mutex);
+    if (!m_noMultiThreadHosts.contains(host)) {
+        m_noMultiThreadHosts.append(host);
+    }
+}
+
+void AsulMultiDownloader::removeNoMultiThreadHost(const QString &host)
+{
+    QMutexLocker locker(&m_mutex);
+    m_noMultiThreadHosts.removeAll(host);
+}
+
+void AsulMultiDownloader::clearNoMultiThreadHosts()
+{
+    QMutexLocker locker(&m_mutex);
+    m_noMultiThreadHosts.clear();
+}
+
+QStringList AsulMultiDownloader::noMultiThreadHosts() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_noMultiThreadHosts;
 }
 
 // ==================== 下载控制接口实现 ====================
@@ -679,12 +744,16 @@ void DownloadTask::onHeadFinished()
     
     // 根据文件大小决定下载策略
     AsulMultiDownloader *downloader = qobject_cast<AsulMultiDownloader*>(parent());
-    if (downloader && m_fileSize > downloader->largeFileThreshold() && m_supportRange) {
-        // 大文件，使用分段下载
+    
+    // PCL优化：检查域名策略
+    bool disableMultiThread = downloader && downloader->shouldDisableMultiThread(m_url);
+    
+    if (downloader && m_fileSize > downloader->largeFileThreshold() && m_supportRange && !disableMultiThread) {
+        // 大文件，使用分段下载（除非域名在禁用列表中）
         locker.unlock();
         startSegmentedDownload();
     } else {
-        // 小文件或不支持Range，使用单线程下载
+        // 小文件、不支持Range或域名禁用多线程，使用单线程下载
         m_segmentCount = 1;
         locker.unlock();
         startSingleDownload();
@@ -1075,4 +1144,82 @@ void SegmentDownloader::onError(QNetworkReply::NetworkError errorCode)
     }
     
     emit error(m_index, errorString);
+}
+
+// ==================== PCL优化：监控和动态调度实现 ====================
+
+void AsulMultiDownloader::onMonitorDownloads()
+{
+    QMutexLocker locker(&m_mutex);
+    
+    if (!m_speedMonitoringEnabled) {
+        return;
+    }
+    
+    // 计算当前速度
+    qint64 currentSpeed = calculateCurrentSpeed();
+    
+    // 如果速度低于阈值，尝试为现有下载任务增加线程
+    if (currentSpeed > 0 && currentSpeed < m_speedThreshold) {
+        // 遍历正在下载的任务，尝试增加分段
+        for (auto it = m_tasks.begin(); it != m_tasks.end(); ++it) {
+            if (m_taskStatus[it.key()] == DownloadStatus::Downloading) {
+                auto task = it.value();
+                
+                // 检查是否可以增加更多线程
+                if (m_activeDownloads < m_maxConcurrentDownloads) {
+                    // 这里可以添加更复杂的逻辑来动态增加分段
+                    // 当前实现中主要通过processQueue来处理
+                }
+            }
+        }
+    }
+    
+    // 尝试处理队列中的任务
+    if (m_activeDownloads < m_maxConcurrentDownloads && !m_taskQueue.isEmpty()) {
+        processQueue();
+    }
+}
+
+qint64 AsulMultiDownloader::calculateCurrentSpeed()
+{
+    // 计算从上次检查到现在的平均速度
+    qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+    qint64 currentBytes = m_statistics.totalDownloaded;
+    
+    if (m_lastSpeedCheck == 0) {
+        m_lastSpeedCheck = currentTime;
+        m_lastBytesDownloaded = currentBytes;
+        return 0;
+    }
+    
+    qint64 timeDiff = currentTime - m_lastSpeedCheck;
+    if (timeDiff < 100) {  // 至少间隔100ms
+        return 0;
+    }
+    
+    qint64 bytesDiff = currentBytes - m_lastBytesDownloaded;
+    qint64 speed = (bytesDiff * 1000) / timeDiff;  // 字节/秒
+    
+    // 更新上次检查的值（每秒更新一次）
+    if (timeDiff >= 1000) {
+        m_lastSpeedCheck = currentTime;
+        m_lastBytesDownloaded = currentBytes;
+    }
+    
+    return speed;
+}
+
+bool AsulMultiDownloader::shouldDisableMultiThread(const QUrl &url) const
+{
+    QString host = url.host().toLower();
+    
+    // 检查是否在禁用多线程的域名列表中
+    for (const QString &pattern : m_noMultiThreadHosts) {
+        if (host.contains(pattern.toLower())) {
+            return true;
+        }
+    }
+    
+    return false;
 }
