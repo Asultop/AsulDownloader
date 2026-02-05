@@ -702,7 +702,7 @@ void DownloadTask::startSingleDownload()
     // 打开文件
     m_file = new QFile(m_savePath);
     if (!m_file->open(QIODevice::WriteOnly)) {
-        m_errorString = tr("无法打开文件: %1").arg(m_savePath);
+        m_errorString = tr("Cannot open file: %1").arg(m_savePath);
         delete m_file;
         m_file = nullptr;
         locker.unlock();
@@ -859,7 +859,7 @@ void DownloadTask::onSegmentError(int segmentIndex, const QString &error)
 {
     QMutexLocker locker(&m_mutex);
     
-    m_errorString = tr("分段%1下载失败: %2").arg(segmentIndex).arg(error);
+    m_errorString = tr("Segment %1 download failed: %2").arg(segmentIndex).arg(error);
     
     // 取消所有其他分段
     for (auto segment : m_segments) {
@@ -897,7 +897,7 @@ void DownloadTask::mergeSegments()
     // 打开目标文件
     QFile outFile(m_savePath);
     if (!outFile.open(QIODevice::WriteOnly)) {
-        m_errorString = tr("无法创建目标文件: %1").arg(m_savePath);
+        m_errorString = tr("Cannot create target file: %1").arg(m_savePath);
         locker.unlock();
         emit failed(m_taskId, m_errorString);
         return;
@@ -909,7 +909,7 @@ void DownloadTask::mergeSegments()
         QFile segmentFile(segmentPath);
         
         if (!segmentFile.open(QIODevice::ReadOnly)) {
-            m_errorString = tr("无法打开分段文件: %1").arg(segmentPath);
+            m_errorString = tr("Cannot open segment file: %1").arg(segmentPath);
             outFile.close();
             locker.unlock();
             emit failed(m_taskId, m_errorString);
@@ -966,7 +966,7 @@ void SegmentDownloader::start()
     // 打开文件
     m_file = new QFile(m_filePath);
     if (!m_file->open(QIODevice::WriteOnly)) {
-        QString error = tr("无法打开文件: %1").arg(m_filePath);
+        QString error = tr("Cannot open file: %1").arg(m_filePath);
         delete m_file;
         m_file = nullptr;
         emit this->error(m_index, error);
