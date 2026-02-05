@@ -1,0 +1,20 @@
+[
+{
+  "directory": "C:/AsulTop/AsulProject/QtProject/AsulDownloader/build",
+  "command": "C:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_NETWORK_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -IC:/AsulTop/AsulProject/QtProject/AsulDownloader/build/AsulDownloader_autogen/include -isystem C:/Qt/6.7.3/mingw_64/include/QtCore -isystem C:/Qt/6.7.3/mingw_64/include -isystem C:/Qt/6.7.3/mingw_64/mkspecs/win32-g++ -isystem C:/Qt/6.7.3/mingw_64/include/QtNetwork -DQT_QML_DEBUG -DQT_DECLARATIVE_DEBUG -g -std=gnu++17 -o CMakeFiles\\AsulDownloader.dir\\AsulDownloader_autogen\\mocs_compilation.cpp.obj -c C:\\AsulTop\\AsulProject\\QtProject\\AsulDownloader\\build\\AsulDownloader_autogen\\mocs_compilation.cpp",
+  "file": "C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/AsulDownloader_autogen/mocs_compilation.cpp",
+  "output": "C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/AsulDownloader.dir/AsulDownloader_autogen/mocs_compilation.cpp.obj"
+},
+{
+  "directory": "C:/AsulTop/AsulProject/QtProject/AsulDownloader/build",
+  "command": "C:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_NETWORK_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -IC:/AsulTop/AsulProject/QtProject/AsulDownloader/build/AsulDownloader_autogen/include -isystem C:/Qt/6.7.3/mingw_64/include/QtCore -isystem C:/Qt/6.7.3/mingw_64/include -isystem C:/Qt/6.7.3/mingw_64/mkspecs/win32-g++ -isystem C:/Qt/6.7.3/mingw_64/include/QtNetwork -DQT_QML_DEBUG -DQT_DECLARATIVE_DEBUG -g -std=gnu++17 -o CMakeFiles\\AsulDownloader.dir\\AsulMultiDownloader.cpp.obj -c C:\\AsulTop\\AsulProject\\QtProject\\AsulDownloader\\AsulMultiDownloader.cpp",
+  "file": "C:/AsulTop/AsulProject/QtProject/AsulDownloader/AsulMultiDownloader.cpp",
+  "output": "C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/AsulDownloader.dir/AsulMultiDownloader.cpp.obj"
+},
+{
+  "directory": "C:/AsulTop/AsulProject/QtProject/AsulDownloader/build",
+  "command": "C:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_NETWORK_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -IC:/AsulTop/AsulProject/QtProject/AsulDownloader/build/AsulDownloader_autogen/include -isystem C:/Qt/6.7.3/mingw_64/include/QtCore -isystem C:/Qt/6.7.3/mingw_64/include -isystem C:/Qt/6.7.3/mingw_64/mkspecs/win32-g++ -isystem C:/Qt/6.7.3/mingw_64/include/QtNetwork -DQT_QML_DEBUG -DQT_DECLARATIVE_DEBUG -g -std=gnu++17 -o CMakeFiles\\AsulDownloader.dir\\main.cpp.obj -c C:\\AsulTop\\AsulProject\\QtProject\\AsulDownloader\\main.cpp",
+  "file": "C:/AsulTop/AsulProject/QtProject/AsulDownloader/main.cpp",
+  "output": "C:/AsulTop/AsulProject/QtProject/AsulDownloader/build/CMakeFiles/AsulDownloader.dir/main.cpp.obj"
+}
+]
