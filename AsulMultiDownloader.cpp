@@ -1288,22 +1288,16 @@ QNetworkAccessManager* AsulMultiDownloader::getNetworkManager()
 {
     QMutexLocker locker(&m_mutex);
     
-    // 从池中返回一个可用的网络管理器
-    // 使用thread-safe的轮询分配
-    static std::atomic<int> index{0};
     if (m_networkManagers.isEmpty()) {
         return nullptr;
     }
     
-    QNetworkAccessManager *manager = m_networkManagers[index.fetch_add(1) % m_networkManagers.size()];
-    return manager;
-}
-
-void AsulMultiDownloader::releaseNetworkManager(QNetworkAccessManager* manager)
-{
-    // 当前实现中，网络管理器是共享的，不需要释放
-    // 只是用于将来可能的扩展
-    Q_UNUSED(manager);
+    // 使用thread-safe的轮询分配
+    // 原子计数器确保线程安全，modulo防止溢出
+    static std::atomic<int> index{0};
+    int currentIndex = index.fetch_add(1) % m_networkManagers.size();
+    
+    return m_networkManagers[currentIndex];
 }
 
 void AsulMultiDownloader::checkAndEmitAllFinished()

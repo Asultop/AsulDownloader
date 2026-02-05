@@ -431,7 +431,6 @@ private:
     qint64 calculateCurrentSpeed();  // 新增：计算当前速度
     void checkAndEmitAllFinished();  // 检查是否所有任务完成并发射信号
     QNetworkAccessManager* getNetworkManager();  // 获取共享的网络管理器
-    void releaseNetworkManager(QNetworkAccessManager* manager);  // 释放网络管理器
     
     // 配置参数
     int m_maxConcurrentDownloads;
