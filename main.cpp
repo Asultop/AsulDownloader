@@ -69,6 +69,7 @@ int main(int argc, char *argv[])
     int completedTasks = 0;
     int failedTasks = 0;
     qint64 totalBytes = 0;  // Total bytes to download
+    QDateTime startTime;    // Track when downloads start
     
     // Connect signals to track progress
     QObject::connect(&downloader, &AsulMultiDownloader::downloadFinished,
@@ -126,11 +127,25 @@ int main(int argc, char *argv[])
     QObject::connect(&downloader, &AsulMultiDownloader::allDownloadsFinished,
                      [&, statsTimer]() {
         statsTimer->stop();
+        
+        // Calculate average speed
+        QDateTime endTime = QDateTime::currentDateTime();
+        qint64 elapsedMs = startTime.msecsTo(endTime);
+        double elapsedSeconds = elapsedMs / 1000.0;
+        
+        // Calculate average speed in MB/s
+        double avgSpeedMBps = 0.0;
+        if (elapsedSeconds > 0 && totalBytes > 0) {
+            avgSpeedMBps = (totalBytes / (1024.0 * 1024.0)) / elapsedSeconds;
+        }
+        
         qDebug() << "\n========================================================";
         qDebug() << "All downloads finished!";
         qDebug() << QString("Completed: %1, Failed: %2, Total: %3")
                     .arg(completedTasks).arg(failedTasks).arg(totalTasks);
         qDebug() << QString("Retries triggered: %1").arg(retryCount);
+        qDebug() << QString("Total time: %1 seconds").arg(elapsedSeconds, 0, 'f', 2);
+        qDebug() << QString("Average speed: %1 MB/s").arg(avgSpeedMBps, 0, 'f', 2);
         qDebug() << "========================================================";
         QCoreApplication::quit();
     });
@@ -169,6 +184,10 @@ int main(int argc, char *argv[])
     }
     
     qDebug() << "Starting downloads...\n";
+    
+    // Record start time for average speed calculation
+    startTime = QDateTime::currentDateTime();
+    
     statsTimer->start(500);  // Start stats timer (report every 500ms)
 
     return a.exec();

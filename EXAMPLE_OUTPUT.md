@@ -116,6 +116,8 @@ Starting downloads...
 All downloads finished!
 Completed: 4675, Failed: 5, Total: 4680
 Retries triggered: 47
+Total time: 125.34 seconds
+Average speed: 1.96 MB/s
 ========================================================
 ```
 
