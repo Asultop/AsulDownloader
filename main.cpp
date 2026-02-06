@@ -10,6 +10,8 @@
  * - Download all library files with proper directory structure
  * - Skip already downloaded files (resume capability)
  * - Real-time progress statistics
+ * - Automatic stall detection and retry (NEW)
+ * - Dirty connection cleanup (NEW)
  * 
  * Directory structure:
  * - Assets: ./minecraft/assets/objects/{first 2 chars of hash}/{hash}
@@ -49,9 +51,18 @@ int main(int argc, char *argv[])
     downloader.setLargeFileThreshold(10 * 1024 * 1024);  // 10MB threshold
     downloader.setSegmentCountForLargeFile(8);  // 8 segments for large files
     
+    // 新增：配置停滞检测和自动重试（解决脏连接和下载停滞问题）
+    downloader.setStallTimeout(15000);      // 15秒无数据传输则视为停滞
+    downloader.setMaxRetryCount(3);         // 最多重试3次
+    downloader.setAutoRetry(true);          // 启用自动重试
+    
     qDebug() << "Concurrency Config:";
     qDebug() << "  Max Concurrent:" << downloader.maxConcurrentDownloads();
     qDebug() << "  Max Conn/Host:" << downloader.maxConnectionsPerHost();
+    qDebug() << "Stall Detection:";
+    qDebug() << "  Stall Timeout:" << downloader.stallTimeout() << "ms";
+    qDebug() << "  Max Retries:" << downloader.maxRetryCount();
+    qDebug() << "  Auto Retry:" << (downloader.autoRetry() ? "Enabled" : "Disabled");
     
     // Track completion
     int totalTasks = 0;
@@ -75,6 +86,15 @@ int main(int argc, char *argv[])
                      [&](const QString &taskId, const QString &errorString) {
         failedTasks++;
         qWarning() << QString("[FAILED] Task %1: %2").arg(taskId).arg(errorString);
+    });
+    
+    // 新增：监控重试事件（停滞检测触发的自动重试）
+    int retryCount = 0;
+    QObject::connect(&downloader, &AsulMultiDownloader::downloadRetrying,
+                     [&](const QString &taskId, int retryAttempt) {
+        retryCount++;
+        qDebug() << QString("[RETRY] Task %1, Attempt %2 (Total retries: %3)")
+                    .arg(taskId).arg(retryAttempt).arg(retryCount);
     });
     
     // Add statistics reporting every 500ms
@@ -110,6 +130,7 @@ int main(int argc, char *argv[])
         qDebug() << "All downloads finished!";
         qDebug() << QString("Completed: %1, Failed: %2, Total: %3")
                     .arg(completedTasks).arg(failedTasks).arg(totalTasks);
+        qDebug() << QString("Retries triggered: %1").arg(retryCount);
         qDebug() << "========================================================";
         QCoreApplication::quit();
     });
