@@ -27,6 +27,7 @@
 #include <QDebug>
 #include <QUrl>
 #include <QTimer>
+#include <QElapsedTimer>
 #include "AsulMultiDownloader.h"
 
 void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &assetsJsonPath, qint64 *totalBytes = nullptr);
@@ -58,6 +59,8 @@ int main(int argc, char *argv[])
     int completedTasks = 0;
     int failedTasks = 0;
     qint64 totalBytes = 0;  // Total bytes to download
+    QElapsedTimer downloadTimer;
+    qint64 lastTotalDownloaded = 0;
     
     // Connect signals to track progress
     QObject::connect(&downloader, &AsulMultiDownloader::downloadFinished,
@@ -90,6 +93,7 @@ int main(int argc, char *argv[])
         
         // Get downloaded bytes
         qint64 downloadedBytes = stats.totalDownloaded;
+        lastTotalDownloaded = downloadedBytes;
         
         // Calculate speed in MB/s
         double speedMBps = stats.totalDownloadSpeed / (1024.0 * 1024.0);
@@ -106,10 +110,22 @@ int main(int argc, char *argv[])
     QObject::connect(&downloader, &AsulMultiDownloader::allDownloadsFinished,
                      [&, statsTimer]() {
         statsTimer->stop();
+        const qint64 elapsedMs = downloadTimer.elapsed();
+        const double elapsedSec = elapsedMs > 0 ? (elapsedMs / 1000.0) : 0.0;
+        const qint64 totalDownloadedForAverage = lastTotalDownloaded > 0
+            ? lastTotalDownloaded
+            : totalBytes;
+        const double averageSpeedMBps = elapsedSec > 0.0
+            ? (totalDownloadedForAverage / (1024.0 * 1024.0)) / elapsedSec
+            : 0.0;
         qDebug() << "\n========================================================";
         qDebug() << "All downloads finished!";
         qDebug() << QString("Completed: %1, Failed: %2, Total: %3")
                     .arg(completedTasks).arg(failedTasks).arg(totalTasks);
+        qDebug() << QString("Average speed: %1 MB/s (Total %2 MB, Time %3 s)")
+                    .arg(averageSpeedMBps, 0, 'f', 2)
+                    .arg(totalDownloadedForAverage / (1024.0 * 1024.0), 0, 'f', 2)
+                    .arg(elapsedSec, 0, 'f', 2);
         qDebug() << "========================================================";
         QCoreApplication::quit();
     });
@@ -148,6 +164,7 @@ int main(int argc, char *argv[])
     }
     
     qDebug() << "Starting downloads...\n";
+    downloadTimer.start();
     statsTimer->start(500);  // Start stats timer (report every 500ms)
 
     return a.exec();
