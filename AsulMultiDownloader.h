@@ -144,7 +144,7 @@ public:
     
     /**
      * @brief 设置下载超时时间
-     * @param msecs 毫秒数（默认30000）
+     * @param msecs 毫秒数（默认15000）
      */
     void setDownloadTimeout(int msecs);
     
@@ -168,7 +168,7 @@ public:
     
     /**
      * @brief 设置最大重试次数
-     * @param count 重试次数（默认3）
+     * @param count 重试次数（默认5）
      */
     void setMaxRetryCount(int count);
     
