@@ -1306,7 +1306,8 @@ void AsulMultiDownloader::onMonitorDownloads()
     }
     
     // === 卡住任务检测 ===
-    // 如果有 Downloading 状态的任务超过 15 秒无进度更新，强制取消并重试
+    // 如果有 Downloading 状态的任务超过 stallTimeoutMs 无进度更新，强制取消并重试
+    const qint64 stallTimeoutMs = 15000;  // 15秒无进度即判定为卡住
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     QStringList stalledTasks;
     for (auto it = m_taskStatus.begin(); it != m_taskStatus.end(); ++it) {
@@ -1316,7 +1317,7 @@ void AsulMultiDownloader::onMonitorDownloads()
             if (lastActive == 0) {
                 // 首次记录
                 m_taskLastProgress[taskId] = now;
-            } else if (now - lastActive > 15000) {  // 15秒无进度
+            } else if (now - lastActive > stallTimeoutMs) {
                 stalledTasks.append(taskId);
             }
         }
@@ -1326,13 +1327,13 @@ void AsulMultiDownloader::onMonitorDownloads()
         if (!m_tasks.contains(taskId)) continue;
         auto task = m_tasks[taskId];
         
-        qDebug() << QString("[STALL] Task %1 stalled for >15s, forcing retry: %2")
-                    .arg(taskId).arg(task->url().toString());
+        qDebug() << QString("[STALL] Task %1 stalled for >%2s, forcing retry: %3")
+                    .arg(taskId).arg(stallTimeoutMs / 1000).arg(task->url().toString());
         
-        // 强制取消当前网络请求
+        // 强制取消当前网络请求并重置状态以允许重试
         task->cancel();
-        task->m_isCanceled = false;  // 重置取消标记以允许重试
-        task->m_isPaused = false;    // 重置暂停标记以允许重试
+        task->m_isCanceled = false;
+        task->m_isPaused = false;
         
         updateHostConnections(task->url().host(), -1);
         m_activeDownloads--;
@@ -1346,7 +1347,7 @@ void AsulMultiDownloader::onMonitorDownloads()
         } else {
             m_taskStatus[taskId] = DownloadStatus::Failed;
             m_statistics.failedTasks++;
-            emit downloadFailed(taskId, "Task stalled: no progress for 15 seconds");
+            emit downloadFailed(taskId, QString("Task stalled: no progress for %1 seconds").arg(stallTimeoutMs / 1000));
             checkAndEmitAllFinished();
         }
     }
