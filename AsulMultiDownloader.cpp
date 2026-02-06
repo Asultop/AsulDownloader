@@ -704,8 +704,8 @@ void DownloadTask::start()
     
     // === 清理上一次尝试的残留状态（重试安全）===
     if (m_reply) {
+        m_reply->disconnect();  // 先断开所有信号，防止abort()同步触发finished信号导致死锁
         m_reply->abort();
-        m_reply->disconnect();  // 断开所有信号，防止旧回复的回调干扰新下载
         m_reply->deleteLater();
         m_reply = nullptr;
     }
@@ -768,6 +768,7 @@ void DownloadTask::pause()
     m_isPaused = true;
     
     if (m_reply) {
+        m_reply->disconnect();  // 先断开信号，防止abort()同步触发finished信号导致死锁
         m_reply->abort();
         m_reply->deleteLater();
         m_reply = nullptr;
@@ -807,6 +808,7 @@ void DownloadTask::cancel()
     m_isCanceled = true;
     
     if (m_reply) {
+        m_reply->disconnect();  // 先断开信号，防止abort()同步触发finished信号导致死锁
         m_reply->abort();
         m_reply->deleteLater();
         m_reply = nullptr;
@@ -1210,6 +1212,7 @@ void SegmentDownloader::cancel()
     m_isCanceled = true;
     
     if (m_reply) {
+        m_reply->disconnect();  // 先断开信号，防止abort()同步触发finished信号导致死锁
         m_reply->abort();
         m_reply->deleteLater();
         m_reply = nullptr;
