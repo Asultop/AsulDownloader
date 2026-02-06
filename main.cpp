@@ -31,7 +31,8 @@
 #include "AsulMultiDownloader.h"
 
 void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &assetsJsonPath, qint64 *totalBytes = nullptr);
-void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &versionJsonPath, qint64 *totalBytes = nullptr);
+void parseAndDownloadVersion(AsulMultiDownloader *versionDownloader, AsulMultiDownloader *libraryDownloader,
+                             const QString &versionJsonPath, qint64 *totalBytes = nullptr);
 
 int main(int argc, char *argv[])
 {
@@ -40,19 +41,30 @@ int main(int argc, char *argv[])
     qDebug() << "AsulDownloader - Minecraft Asset and Version Downloader";
     qDebug() << "========================================================";
     
-    // Create downloader instance
-    AsulMultiDownloader downloader;
+    // Create downloader instances
+    AsulMultiDownloader assetsDownloader;
+    AsulMultiDownloader librariesDownloader;
+    AsulMultiDownloader versionDownloader;
     
-    // Configure downloader for optimal performance
-    // 优化：极大幅增加并发数，针对小文件下载，突破TCP/HTTP延迟瓶颈
-    downloader.setMaxConcurrentDownloads(512);  // 512并发
-    downloader.setMaxConnectionsPerHost(512);   // 允许针对同一CDN建立大量连接
-    downloader.setLargeFileThreshold(10 * 1024 * 1024);  // 10MB threshold
-    downloader.setSegmentCountForLargeFile(8);  // 8 segments for large files
+    // Configure downloader for assets (512 concurrent, same host limit)
+    assetsDownloader.setMaxConcurrentDownloads(512);
+    assetsDownloader.setMaxConnectionsPerHost(512);
+    assetsDownloader.setLargeFileThreshold(1LL * 1024 * 1024);  // 1MB threshold for assets
+    assetsDownloader.setSegmentCountForLargeFile(4);
+    // Configure downloader for libraries (64 concurrent, same host limit)
+    librariesDownloader.setMaxConcurrentDownloads(64);
+    librariesDownloader.setMaxConnectionsPerHost(64);
+    librariesDownloader.setLargeFileThreshold(5LL * 1024 * 1024);  // 5MB threshold for libraries
+    librariesDownloader.setSegmentCountForLargeFile(4);
+    // Configure downloader for version.jar (segment download with 10MB threshold)
+    versionDownloader.setLargeFileThreshold(10LL * 1024 * 1024);  // 10MB threshold for version.jar
+    versionDownloader.setSegmentCountForLargeFile(8);
     
     qDebug() << "Concurrency Config:";
-    qDebug() << "  Max Concurrent:" << downloader.maxConcurrentDownloads();
-    qDebug() << "  Max Conn/Host:" << downloader.maxConnectionsPerHost();
+    qDebug() << "  Assets Max Concurrent:" << assetsDownloader.maxConcurrentDownloads();
+    qDebug() << "  Assets Max Conn/Host:" << assetsDownloader.maxConnectionsPerHost();
+    qDebug() << "  Libraries Max Concurrent:" << librariesDownloader.maxConcurrentDownloads();
+    qDebug() << "  Libraries Max Conn/Host:" << librariesDownloader.maxConnectionsPerHost();
     
     // Track completion
     int totalTasks = 0;
@@ -60,11 +72,12 @@ int main(int argc, char *argv[])
     int failedTasks = 0;
     qint64 totalBytes = 0;  // Total bytes to download
     QElapsedTimer downloadTimer;
-    qint64 lastTotalDownloaded = 0;
+    qint64 lastTotalDownloadedAssets = 0;
+    qint64 lastTotalDownloadedLibraries = 0;
+    qint64 lastTotalDownloadedVersion = 0;
     
-    // Connect signals to track progress
-    QObject::connect(&downloader, &AsulMultiDownloader::downloadFinished,
-                     [&](const QString &taskId, const QString &savePath) {
+    auto onDownloadFinished = [&](const QString &taskId, const QString &savePath) {
+        Q_UNUSED(taskId);
         completedTasks++;
         if (completedTasks % 100 == 0 || completedTasks == totalTasks) {
             qDebug() << QString("[%1/%2] Completed: %3")
@@ -72,31 +85,43 @@ int main(int argc, char *argv[])
                         .arg(totalTasks)
                         .arg(QFileInfo(savePath).fileName());
         }
-    });
+    };
     
-    QObject::connect(&downloader, &AsulMultiDownloader::downloadFailed,
-                     [&](const QString &taskId, const QString &errorString) {
+    auto onDownloadFailed = [&](const QString &taskId, const QString &errorString) {
         failedTasks++;
         qWarning() << QString("[FAILED] Task %1: %2").arg(taskId).arg(errorString);
-    });
+    };
     
-    // Add statistics reporting every 500ms
+    QObject::connect(&assetsDownloader, &AsulMultiDownloader::downloadFinished, onDownloadFinished);
+    QObject::connect(&librariesDownloader, &AsulMultiDownloader::downloadFinished, onDownloadFinished);
+    QObject::connect(&versionDownloader, &AsulMultiDownloader::downloadFinished, onDownloadFinished);
+    
+    QObject::connect(&assetsDownloader, &AsulMultiDownloader::downloadFailed, onDownloadFailed);
+    QObject::connect(&librariesDownloader, &AsulMultiDownloader::downloadFailed, onDownloadFailed);
+    QObject::connect(&versionDownloader, &AsulMultiDownloader::downloadFailed, onDownloadFailed);
+    
+    // Add statistics reporting every 500ms (combined)
     QTimer *statsTimer = new QTimer(&a);
     QObject::connect(statsTimer, &QTimer::timeout, [&]() {
-        DownloadStatistics stats = downloader.getStatistics();
+        DownloadStatistics assetsStats = assetsDownloader.getStatistics();
+        DownloadStatistics librariesStats = librariesDownloader.getStatistics();
+        DownloadStatistics versionStats = versionDownloader.getStatistics();
         
         // Calculate downloaded file count (completed + failed)
         int downloadedFiles = completedTasks + failedTasks;
         
         // Calculate downloading file count (active downloads)
-        int downloadingFiles = stats.activeDownloads;
+        int downloadingFiles = assetsStats.activeDownloads + librariesStats.activeDownloads + versionStats.activeDownloads;
         
         // Get downloaded bytes
-        qint64 downloadedBytes = stats.totalDownloaded;
-        lastTotalDownloaded = downloadedBytes;
+        lastTotalDownloadedAssets = assetsStats.totalDownloaded;
+        lastTotalDownloadedLibraries = librariesStats.totalDownloaded;
+        lastTotalDownloadedVersion = versionStats.totalDownloaded;
+        qint64 downloadedBytes = lastTotalDownloadedAssets + lastTotalDownloadedLibraries + lastTotalDownloadedVersion;
         
         // Calculate speed in MB/s
-        double speedMBps = stats.totalDownloadSpeed / (1024.0 * 1024.0);
+        qint64 totalSpeedBytes = assetsStats.totalDownloadSpeed + librariesStats.totalDownloadSpeed + versionStats.totalDownloadSpeed;
+        double speedMBps = totalSpeedBytes / (1024.0 * 1024.0);
         
         qDebug() << QString("[PROGRESS] %1 | %2 | %3 | %4 MB | %5 MB | Speed: %6 MB/s")
                     .arg(downloadedFiles)
@@ -107,13 +132,19 @@ int main(int argc, char *argv[])
                     .arg(speedMBps, 0, 'f', 2);
     });
     
-    QObject::connect(&downloader, &AsulMultiDownloader::allDownloadsFinished,
-                     [&, statsTimer]() {
+    bool assetsFinished = false;
+    bool librariesFinished = false;
+    bool versionFinished = false;
+    
+    auto tryFinishAll = [&]() {
+        if (!assetsFinished || !librariesFinished || !versionFinished) {
+            return;
+        }
         statsTimer->stop();
         const qint64 elapsedMs = downloadTimer.elapsed();
         const double elapsedSec = elapsedMs > 0 ? (elapsedMs / 1000.0) : 0.0;
-        const qint64 totalDownloadedForAverage = lastTotalDownloaded > 0
-            ? lastTotalDownloaded
+        const qint64 totalDownloadedForAverage = (lastTotalDownloadedAssets + lastTotalDownloadedLibraries + lastTotalDownloadedVersion) > 0
+            ? (lastTotalDownloadedAssets + lastTotalDownloadedLibraries + lastTotalDownloadedVersion)
             : totalBytes;
         const double averageSpeedMBps = elapsedSec > 0.0
             ? (totalDownloadedForAverage / (1024.0 * 1024.0)) / elapsedSec
@@ -128,6 +159,22 @@ int main(int argc, char *argv[])
                     .arg(elapsedSec, 0, 'f', 2);
         qDebug() << "========================================================";
         QCoreApplication::quit();
+    };
+    
+    QObject::connect(&assetsDownloader, &AsulMultiDownloader::allDownloadsFinished,
+                     [&]() {
+        assetsFinished = true;
+        tryFinishAll();
+    });
+    QObject::connect(&librariesDownloader, &AsulMultiDownloader::allDownloadsFinished,
+                     [&]() {
+        librariesFinished = true;
+        tryFinishAll();
+    });
+    QObject::connect(&versionDownloader, &AsulMultiDownloader::allDownloadsFinished,
+                     [&]() {
+        versionFinished = true;
+        tryFinishAll();
     });
     
     // Parse and download assets
@@ -139,7 +186,7 @@ int main(int argc, char *argv[])
         qWarning() << "Current directory:" << QDir::currentPath();
         return 1;
     }
-    parseAndDownloadAssets(&downloader, "assets.json", &totalBytes);
+    parseAndDownloadAssets(&assetsDownloader, "assets.json", &totalBytes);
     
     // Parse and download version files
     qDebug() << "\nParsing version.json...";
@@ -150,10 +197,13 @@ int main(int argc, char *argv[])
         qWarning() << "Current directory:" << QDir::currentPath();
         return 1;
     }
-    parseAndDownloadVersion(&downloader, "version.json", &totalBytes);
+    parseAndDownloadVersion(&versionDownloader, &librariesDownloader, "version.json", &totalBytes);
     
     // Get total task count
-    totalTasks = downloader.getAllTaskIds().count();
+    int assetsTasks = assetsDownloader.getAllTaskIds().count();
+    int librariesTasks = librariesDownloader.getAllTaskIds().count();
+    int versionTasks = versionDownloader.getAllTaskIds().count();
+    totalTasks = assetsTasks + librariesTasks + versionTasks;
     qDebug() << QString("\nTotal tasks added: %1").arg(totalTasks);
     qDebug() << QString("Total size: %1 MB").arg(totalBytes / (1024.0 * 1024.0), 0, 'f', 2);
     
@@ -161,6 +211,16 @@ int main(int argc, char *argv[])
         qDebug() << "All files are already downloaded. Nothing to do.";
         qDebug() << "========================================================";
         return 0;
+    }
+    
+    if (assetsTasks == 0) {
+        assetsFinished = true;
+    }
+    if (librariesTasks == 0) {
+        librariesFinished = true;
+    }
+    if (versionTasks == 0) {
+        versionFinished = true;
     }
     
     qDebug() << "Starting downloads...\n";
@@ -237,7 +297,8 @@ void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &asse
     qDebug() << QString("Added %1 new asset download tasks").arg(count);
 }
 
-void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &versionJsonPath, qint64 *totalBytes)
+void parseAndDownloadVersion(AsulMultiDownloader *versionDownloader, AsulMultiDownloader *libraryDownloader,
+                             const QString &versionJsonPath, qint64 *totalBytes)
 {
     // Read version.json
     QFile file(versionJsonPath);
@@ -275,7 +336,7 @@ void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &ver
         // Check if file already exists
         QFileInfo fileInfo(jarPath);
         if (!fileInfo.exists() || fileInfo.size() != clientSize) {
-            downloader->addDownload(QUrl(clientUrl), jarPath, 10, clientSize);  // Higher priority
+            versionDownloader->addDownload(QUrl(clientUrl), jarPath, 10, clientSize);  // Higher priority
             qDebug() << QString("Added client.jar download: %1").arg(versionId);
             
             // Add to total bytes
@@ -333,7 +394,7 @@ void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &ver
         }
         
         // Add download task
-        downloader->addDownload(QUrl(url), localPath, 5, size);  // Medium priority
+        libraryDownloader->addDownload(QUrl(url), localPath, 5, size);  // Medium priority
         libCount++;
         
         // Add to total bytes
