@@ -234,7 +234,7 @@ public:
      * @param priority 优先级（默认0）
      * @return 任务ID
      */
-    QString addDownload(const QUrl &url, const QString &savePath, int priority = 0);
+    QString addDownload(const QUrl &url, const QString &savePath, int priority = 0, qint64 knownFileSize = -1);
     
     /**
      * @brief 批量添加下载任务
@@ -458,6 +458,7 @@ private:
     QQueue<QString> m_taskQueue;
     QHash<QString, DownloadStatus> m_taskStatus;
     QHash<QString, int> m_taskRetryCount;
+    QHash<QString, qint64> m_taskLastProgress;  // taskId -> 最后进度更新时间戳（用于卡住检测）
     
     // 线程和网络管理
     QHash<QString, int> m_hostConnections;  // Host -> 当前连接数
@@ -509,6 +510,7 @@ public:
     
     void setSegmentCount(int count) { m_segmentCount = count; }
     void setTimeout(int msecs) { m_timeout = msecs; }
+    void setKnownFileSize(qint64 size) { m_fileSize = size; }
     
 signals:
     void started(const QString &taskId);
@@ -558,6 +560,8 @@ private:
     bool m_isCanceled;
     
     QMutex m_mutex;
+    
+    friend class AsulMultiDownloader;  // 允许管理器访问私有成员（卡住检测等）
 };
 
 /**

@@ -208,7 +208,7 @@ void parseAndDownloadAssets(AsulMultiDownloader *downloader, const QString &asse
         
         // Add download task with low priority (0) for assets
         // Priority: 0 = low (assets), 5 = medium (libraries), 10 = high (client.jar)
-        downloader->addDownload(QUrl(url), localPath, 0);
+        downloader->addDownload(QUrl(url), localPath, 0, size);
         count++;
         
         // Add to total bytes
@@ -258,7 +258,7 @@ void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &ver
         // Check if file already exists
         QFileInfo fileInfo(jarPath);
         if (!fileInfo.exists() || fileInfo.size() != clientSize) {
-            downloader->addDownload(QUrl(clientUrl), jarPath, 10);  // Higher priority
+            downloader->addDownload(QUrl(clientUrl), jarPath, 10, clientSize);  // Higher priority
             qDebug() << QString("Added client.jar download: %1").arg(versionId);
             
             // Add to total bytes
@@ -316,7 +316,7 @@ void parseAndDownloadVersion(AsulMultiDownloader *downloader, const QString &ver
         }
         
         // Add download task
-        downloader->addDownload(QUrl(url), localPath, 5);  // Medium priority
+        downloader->addDownload(QUrl(url), localPath, 5, size);  // Medium priority
         libCount++;
         
         // Add to total bytes

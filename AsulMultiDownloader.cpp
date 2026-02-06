@@ -195,7 +195,7 @@ QStringList AsulMultiDownloader::noMultiThreadHosts() const
 
 // ==================== 下载控制接口实现 ====================
 
-QString AsulMultiDownloader::addDownload(const QUrl &url, const QString &savePath, int priority)
+QString AsulMultiDownloader::addDownload(const QUrl &url, const QString &savePath, int priority, qint64 knownFileSize)
 {
     QMutexLocker locker(&m_mutex);
     
@@ -204,6 +204,11 @@ QString AsulMultiDownloader::addDownload(const QUrl &url, const QString &savePat
     // 创建下载任务
     auto task = std::make_shared<DownloadTask>(taskId, url, savePath, priority, this);
     task->setTimeout(m_downloadTimeout);
+    
+    // 设置已知文件大小（跳过HEAD请求优化）
+    if (knownFileSize > 0) {
+        task->setKnownFileSize(knownFileSize);
+    }
     
     // 设置分段数
     task->setSegmentCount(m_segmentCount);
@@ -450,11 +455,17 @@ void AsulMultiDownloader::onTaskFinished(const QString &taskId)
         return;
     }
     
+    // 状态守卫：仅处理 Downloading 状态的任务，防止重复处理
+    if (m_taskStatus[taskId] != DownloadStatus::Downloading) {
+        return;
+    }
+    
     auto task = m_tasks[taskId];
     m_taskStatus[taskId] = DownloadStatus::Completed;
     updateHostConnections(task->url().host(), -1);
     m_activeDownloads--;
     m_statistics.completedTasks++;
+    m_taskLastProgress.remove(taskId);
     
     emit downloadFinished(taskId, task->savePath());
     
@@ -469,6 +480,11 @@ void AsulMultiDownloader::onTaskFailed(const QString &taskId, const QString &err
     QMutexLocker locker(&m_mutex);
     
     if (!m_tasks.contains(taskId)) {
+        return;
+    }
+    
+    // 状态守卫：仅处理 Downloading 状态的任务，防止重复处理
+    if (m_taskStatus[taskId] != DownloadStatus::Downloading) {
         return;
     }
     
@@ -500,6 +516,11 @@ void AsulMultiDownloader::onTaskFailed(const QString &taskId, const QString &err
 
 void AsulMultiDownloader::onTaskProgress(const QString &taskId, qint64 received, qint64 total)
 {
+    // 更新卡住检测时间戳
+    {
+        QMutexLocker locker(&m_mutex);
+        m_taskLastProgress[taskId] = QDateTime::currentMSecsSinceEpoch();
+    }
     emit downloadProgress(taskId, received, total);
 }
 
@@ -510,26 +531,34 @@ void AsulMultiDownloader::onUpdateStatistics()
     m_statistics.activeDownloads = m_activeDownloads;
     m_statistics.queuedDownloads = m_taskQueue.size();
     
-    // 计算总下载量
+    // 计算总下载量：已完成任务用fileSize（精确），进行中任务用downloadedSize（实时）
     qint64 totalDownloaded = 0;
-    for (auto task : m_tasks) {
-        totalDownloaded += task->downloadedSize();
+    for (auto it = m_tasks.begin(); it != m_tasks.end(); ++it) {
+        DownloadStatus status = m_taskStatus.value(it.key(), DownloadStatus::Queued);
+        if (status == DownloadStatus::Completed) {
+            // 已完成任务：用fileSize确保不因重试重置而回退
+            totalDownloaded += it.value()->fileSize() > 0 ? it.value()->fileSize() : it.value()->downloadedSize();
+        } else if (status == DownloadStatus::Downloading) {
+            // 进行中任务：用实时进度
+            totalDownloaded += it.value()->downloadedSize();
+        }
+        // Queued/Failed/Paused的任务不计入当前下载量
     }
     m_statistics.totalDownloaded = totalDownloaded;
     
-    // 计算下载速度（使用移动平均）
+    // 计算下载速度
     qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
     if (m_lastSpeedCheck > 0) {
         qint64 timeDiff = currentTime - m_lastSpeedCheck;
         if (timeDiff >= 1000) {  // 至少1秒
             qint64 bytesDiff = totalDownloaded - m_lastBytesDownloaded;
+            if (bytesDiff < 0) bytesDiff = 0;  // 防止负速度（重试时downloadedSize重置）
             // 计算速度（字节/秒）
             m_statistics.totalDownloadSpeed = (bytesDiff * 1000) / timeDiff;
             
             // 限制最大速度显示（避免显示不合理的高速度）
-            // 假设最大速度为1GB/s
             if (m_statistics.totalDownloadSpeed > 1024 * 1024 * 1024) {
-                m_statistics.totalDownloadSpeed = 0;  // 重置异常值
+                m_statistics.totalDownloadSpeed = 0;
             }
             
             m_lastSpeedCheck = currentTime;
@@ -577,6 +606,7 @@ void AsulMultiDownloader::startDownloadTask(std::shared_ptr<DownloadTask> task)
     QString host = task->url().host();
     
     m_taskStatus[taskId] = DownloadStatus::Downloading;
+    m_taskLastProgress[taskId] = QDateTime::currentMSecsSinceEpoch();  // 初始化卡住检测时间戳
     updateHostConnections(host, 1);
     m_activeDownloads++;
     
@@ -672,6 +702,32 @@ void DownloadTask::start()
         return;
     }
     
+    // === 清理上一次尝试的残留状态（重试安全）===
+    if (m_reply) {
+        m_reply->abort();
+        m_reply->disconnect();  // 断开所有信号，防止旧回复的回调干扰新下载
+        m_reply->deleteLater();
+        m_reply = nullptr;
+    }
+    
+    for (auto segment : m_segments) {
+        segment->cancel();
+        segment->deleteLater();
+    }
+    m_segments.clear();
+    m_segmentProgress.clear();
+    m_completedSegments = 0;
+    
+    if (m_file) {
+        m_file->close();
+        delete m_file;
+        m_file = nullptr;
+    }
+    
+    m_downloadedSize = 0;
+    m_errorString.clear();
+    // === 清理完成 ===
+    
     // 确保保存目录存在
     QFileInfo fileInfo(m_savePath);
     QDir dir = fileInfo.absoluteDir();
@@ -681,16 +737,28 @@ void DownloadTask::start()
     
     emit started(m_taskId);
     
-    // 首先发送HEAD请求获取文件大小和是否支持Range
+    // 优化：如果已知文件大小且小于分段阈值，直接单线程下载，跳过HEAD请求
+    AsulMultiDownloader *downloader = qobject_cast<AsulMultiDownloader*>(parent());
+    if (m_fileSize > 0 && downloader && m_fileSize <= downloader->m_largeFileThreshold) {
+        // 小文件，已知大小，无需HEAD探测，直接下载
+        m_supportRange = false;
+        m_segmentCount = 1;
+        locker.unlock();
+        startSingleDownload();
+        return;
+    }
+    
+    // 大文件或未知大小时发送HEAD请求获取文件大小和是否支持Range
     QNetworkRequest request(m_url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, 
                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);  // 强制HTTP/1.1，避免HTTP/2流限制
     request.setTransferTimeout(m_timeout);
     
     m_reply = m_networkManager->head(request);
+    // 注意：只连接 finished 信号。不连接 errorOccurred，避免 error+finished 双重触发
+    // onHeadFinished 内部已检查 m_reply->error() 来处理错误
     connect(m_reply, &QNetworkReply::finished, this, &DownloadTask::onHeadFinished);
-    connect(m_reply, QOverload<QNetworkReply::NetworkError>::of(&QNetworkReply::errorOccurred),
-            this, &DownloadTask::onDownloadError);
 }
 
 void DownloadTask::pause()
@@ -826,13 +894,14 @@ void DownloadTask::startSingleDownload()
     QNetworkRequest request(m_url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, 
                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);  // 强制HTTP/1.1
     request.setTransferTimeout(m_timeout);
     
     m_reply = m_networkManager->get(request);
     connect(m_reply, &QNetworkReply::downloadProgress, this, &DownloadTask::onDownloadProgress);
     connect(m_reply, &QNetworkReply::finished, this, &DownloadTask::onDownloadFinished);
-    connect(m_reply, QOverload<QNetworkReply::NetworkError>::of(&QNetworkReply::errorOccurred),
-            this, &DownloadTask::onDownloadError);
+    // 注意：不连接 errorOccurred，避免 error+finished 双重触发导致回复指针错乱
+    // onDownloadFinished 内部已检查 m_reply->error() 来处理错误
     connect(m_reply, &QNetworkReply::readyRead, this, [this]() {
         if (m_file && m_reply) {
             m_file->write(m_reply->readAll());
@@ -928,6 +997,18 @@ void DownloadTask::onDownloadFinished()
     
     m_reply->deleteLater();
     m_reply = nullptr;
+    
+    // 修复：任务完成时用实际文件大小更新downloadedSize，确保统计准确
+    if (m_fileSize > 0) {
+        m_downloadedSize = m_fileSize;
+    } else {
+        // 文件大小未知时，读取实际写入的文件大小
+        QFileInfo fi(m_savePath);
+        if (fi.exists()) {
+            m_downloadedSize = fi.size();
+            m_fileSize = fi.size();
+        }
+    }
     
     locker.unlock();
     emit finished(m_taskId);
@@ -1040,6 +1121,11 @@ void DownloadTask::mergeSegments()
     
     outFile.close();
     
+    // 修复：分段下载完成时也更新downloadedSize
+    if (m_fileSize > 0) {
+        m_downloadedSize = m_fileSize;
+    }
+    
     locker.unlock();
     emit finished(m_taskId);
 }
@@ -1108,14 +1194,15 @@ void SegmentDownloader::start()
     QNetworkRequest request(m_url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, 
                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);  // 强制HTTP/1.1
     request.setTransferTimeout(m_timeout);
     request.setRawHeader("Range", QString("bytes=%1-%2").arg(m_start).arg(m_end).toUtf8());
     
     m_reply = m_networkManager->get(request);
     connect(m_reply, &QNetworkReply::readyRead, this, &SegmentDownloader::onReadyRead);
     connect(m_reply, &QNetworkReply::finished, this, &SegmentDownloader::onFinished);
-    connect(m_reply, QOverload<QNetworkReply::NetworkError>::of(&QNetworkReply::errorOccurred),
-            this, &SegmentDownloader::onError);
+    // 注意：不连接 errorOccurred，避免 error+finished 双重触发
+    // onFinished 内部已检查 m_reply->error() 来处理错误
 }
 
 void SegmentDownloader::cancel()
@@ -1218,22 +1305,48 @@ void AsulMultiDownloader::onMonitorDownloads()
         return;
     }
     
-    // 计算当前速度
-    qint64 currentSpeed = calculateCurrentSpeed();
-    
-    // 如果速度低于阈值，尝试为现有下载任务增加线程
-    if (currentSpeed > 0 && currentSpeed < m_speedThreshold) {
-        // 遍历正在下载的任务，尝试增加分段
-        for (auto it = m_tasks.begin(); it != m_tasks.end(); ++it) {
-            if (m_taskStatus[it.key()] == DownloadStatus::Downloading) {
-                auto task = it.value();
-                
-                // 检查是否可以增加更多线程
-                if (m_activeDownloads < m_maxConcurrentDownloads) {
-                    // 这里可以添加更复杂的逻辑来动态增加分段
-                    // 当前实现中主要通过processQueue来处理
-                }
+    // === 卡住任务检测 ===
+    // 如果有 Downloading 状态的任务超过 60 秒无进度更新，强制取消并重试
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QStringList stalledTasks;
+    for (auto it = m_taskStatus.begin(); it != m_taskStatus.end(); ++it) {
+        if (it.value() == DownloadStatus::Downloading) {
+            const QString &taskId = it.key();
+            qint64 lastActive = m_taskLastProgress.value(taskId, 0);
+            if (lastActive == 0) {
+                // 首次记录
+                m_taskLastProgress[taskId] = now;
+            } else if (now - lastActive > 60000) {  // 60秒无进度
+                stalledTasks.append(taskId);
             }
+        }
+    }
+    
+    for (const QString &taskId : stalledTasks) {
+        if (!m_tasks.contains(taskId)) continue;
+        auto task = m_tasks[taskId];
+        
+        qDebug() << QString("[STALL] Task %1 stalled for >60s, forcing retry: %2")
+                    .arg(taskId).arg(task->url().toString());
+        
+        // 强制取消当前网络请求
+        task->cancel();
+        task->m_isCanceled = false;  // 重置取消标记以允许重试
+        
+        updateHostConnections(task->url().host(), -1);
+        m_activeDownloads--;
+        m_taskLastProgress.remove(taskId);
+        
+        // 重试或标记失败
+        if (m_taskRetryCount[taskId] < m_maxRetryCount) {
+            m_taskRetryCount[taskId]++;
+            m_taskStatus[taskId] = DownloadStatus::Queued;
+            m_taskQueue.enqueue(taskId);
+        } else {
+            m_taskStatus[taskId] = DownloadStatus::Failed;
+            m_statistics.failedTasks++;
+            emit downloadFailed(taskId, "Task stalled: no progress for 60 seconds");
+            checkAndEmitAllFinished();
         }
     }
     
