@@ -2,6 +2,19 @@
 
 Qt 高性能下载库 - 基于 AsulMultiDownloader 实现的 Minecraft 资源下载器
 
+## 最新更新 ✨
+
+### 停滞连接检测和自动重试 (Stall Detection & Auto-Retry)
+
+解决了脏连接（0.00MB/s）和下载停滞问题：
+- ✅ 自动检测和清理无进度的连接
+- ✅ 15秒无数据传输自动重试
+- ✅ 无需手动重启程序
+- ✅ 提升下载成功率和速度
+
+详细说明：[STALL_DETECTION_IMPROVEMENTS.md](STALL_DETECTION_IMPROVEMENTS.md)  
+快速开始：[QUICK_START_STALL_DETECTION.md](QUICK_START_STALL_DETECTION.md)
+
 ## 功能特性
 
 AsulDownloader 是一个高性能的 Minecraft 资源下载工具，能够：
@@ -16,10 +29,16 @@ AsulDownloader 是一个高性能的 Minecraft 资源下载工具，能够：
   - 下载所有 libraries 到正确的目录结构
 
 - ⚡ **高性能并发下载**
-  - 默认 16 线程并发下载
+  - 默认 512 线程并发下载
   - 智能调度，充分利用网络带宽
   - 大文件自动分段下载（>10MB）
   - 实时进度统计和速度监控
+
+- 🔧 **智能连接管理** (新增)
+  - 自动检测停滞连接（0.00MB/s）
+  - 15秒无进度自动重试
+  - 最多3次自动重试
+  - 脏连接自动清理
 
 ## 目录结构
 
