@@ -179,6 +179,18 @@ public:
     int maxRetryCount() const;
     
     /**
+     * @brief 设置停滞超时时间（连接无数据传输时的超时）
+     * @param msecs 毫秒数（默认15000）
+     */
+    void setStallTimeout(int msecs);
+    
+    /**
+     * @brief 获取停滞超时时间
+     * @return 当前停滞超时时间（毫秒）
+     */
+    int stallTimeout() const;
+    
+    /**
      * @brief 设置速度监控阈值（PCL优化）
      * @param bytesPerSecond 速度阈值，低于此速度时尝试增加线程（默认256KB/s）
      */
@@ -440,6 +452,7 @@ private:
     int m_downloadTimeout;
     bool m_autoRetry;
     int m_maxRetryCount;
+    int m_stallTimeout;                  // 停滞超时时间（无数据传输）
     
     // PCL优化参数
     bool m_speedMonitoringEnabled;       // 速度监控开关
@@ -509,6 +522,7 @@ public:
     
     void setSegmentCount(int count) { m_segmentCount = count; }
     void setTimeout(int msecs) { m_timeout = msecs; }
+    void setStallTimeout(int msecs) { m_stallTimeout = msecs; }
     
 signals:
     void started(const QString &taskId);
@@ -526,6 +540,7 @@ private slots:
     void onSegmentFinished(int segmentIndex);
     void onSegmentError(int segmentIndex, const QString &error);
     void onSegmentProgress(int segmentIndex, qint64 bytesReceived, qint64 bytesTotal);
+    void onStallCheck();  // 检查停滞超时
     
 private:
     void startSingleDownload();
@@ -537,9 +552,12 @@ private:
     QString m_savePath;
     int m_priority;
     int m_timeout;
+    int m_stallTimeout;  // 停滞超时时间
     
     qint64 m_fileSize;
     qint64 m_downloadedSize;
+    qint64 m_lastProgressBytes;  // 上次进度更新时的字节数
+    qint64 m_lastProgressTime;   // 上次进度更新时间
     bool m_supportRange;
     int m_segmentCount;
     QString m_errorString;
@@ -548,6 +566,7 @@ private:
     QNetworkReply *m_reply;
     QFile *m_file;
     bool m_ownsNetworkManager;  // 是否拥有网络管理器（需要释放）
+    QTimer *m_stallTimer;        // 停滞检查定时器
     
     // 分段下载相关
     QList<SegmentDownloader*> m_segments;
@@ -569,7 +588,7 @@ class SegmentDownloader : public QObject
     
 public:
     explicit SegmentDownloader(int index, const QUrl &url, const QString &filePath,
-                              qint64 start, qint64 end, int timeout, QObject *parent = nullptr);
+                              qint64 start, qint64 end, int timeout, int stallTimeout, QObject *parent = nullptr);
     ~SegmentDownloader();
     
     void start();
@@ -586,6 +605,7 @@ private slots:
     void onReadyRead();
     void onFinished();
     void onError(QNetworkReply::NetworkError error);
+    void onStallCheck();  // 检查停滞超时
     
 private:
     int m_index;
@@ -594,12 +614,16 @@ private:
     qint64 m_start;
     qint64 m_end;
     qint64 m_bytesReceived;
+    qint64 m_lastProgressBytes;  // 上次进度更新时的字节数
+    qint64 m_lastProgressTime;   // 上次进度更新时间
     int m_timeout;
+    int m_stallTimeout;          // 停滞超时时间
     
     QNetworkAccessManager *m_networkManager;  // 从池中借用的网络管理器
     QNetworkReply *m_reply;
     QFile *m_file;
     bool m_ownsNetworkManager;  // 是否拥有网络管理器（需要释放）
+    QTimer *m_stallTimer;        // 停滞检查定时器
     
     bool m_isCanceled;
 };

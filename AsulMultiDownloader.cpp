@@ -17,6 +17,7 @@
     , m_downloadTimeout(30000)
     , m_autoRetry(true)
     , m_maxRetryCount(3)
+    , m_stallTimeout(15000)  // 默认15秒无数据传输则视为停滞
     , m_activeDownloads(0)
     , m_taskIdCounter(0)
     , m_speedMonitoringEnabled(true)
@@ -139,6 +140,18 @@ int AsulMultiDownloader::maxRetryCount() const
 {
     QMutexLocker locker(&m_mutex);
     return m_maxRetryCount;
+}
+
+void AsulMultiDownloader::setStallTimeout(int msecs)
+{
+    QMutexLocker locker(&m_mutex);
+    m_stallTimeout = qMax(1000, msecs);  // 最小1秒
+}
+
+int AsulMultiDownloader::stallTimeout() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_stallTimeout;
 }
 
 // ==================== PCL优化新增接口实现 ====================
@@ -625,14 +638,18 @@ DownloadTask::DownloadTask(const QString &taskId, const QUrl &url,
     , m_savePath(savePath)
     , m_priority(priority)
     , m_timeout(30000)
+    , m_stallTimeout(15000)
     , m_fileSize(-1)
     , m_downloadedSize(0)
+    , m_lastProgressBytes(0)
+    , m_lastProgressTime(0)
     , m_supportRange(false)
     , m_segmentCount(1)
     , m_networkManager(nullptr)
     , m_reply(nullptr)
     , m_file(nullptr)
     , m_ownsNetworkManager(false)
+    , m_stallTimer(nullptr)
     , m_completedSegments(0)
     , m_isPaused(false)
     , m_isCanceled(false)
@@ -642,11 +659,17 @@ DownloadTask::DownloadTask(const QString &taskId, const QUrl &url,
     if (downloader) {
         m_networkManager = downloader->getNetworkManager();
         m_ownsNetworkManager = false;
+        m_stallTimeout = downloader->stallTimeout();  // 获取停滞超时配置
     } else {
         // 如果无法获取，创建自己的（兜底方案）
         m_networkManager = new QNetworkAccessManager(this);
         m_ownsNetworkManager = true;
     }
+    
+    // 创建停滞检查定时器
+    m_stallTimer = new QTimer(this);
+    m_stallTimer->setSingleShot(false);
+    connect(m_stallTimer, &QTimer::timeout, this, &DownloadTask::onStallCheck);
 }
 
 DownloadTask::~DownloadTask()
@@ -699,6 +722,11 @@ void DownloadTask::pause()
     
     m_isPaused = true;
     
+    // 停止停滞检查定时器
+    if (m_stallTimer) {
+        m_stallTimer->stop();
+    }
+    
     if (m_reply) {
         m_reply->abort();
         m_reply->deleteLater();
@@ -737,6 +765,11 @@ void DownloadTask::cancel()
     QMutexLocker locker(&m_mutex);
     
     m_isCanceled = true;
+    
+    // 停止停滞检查定时器
+    if (m_stallTimer) {
+        m_stallTimer->stop();
+    }
     
     if (m_reply) {
         m_reply->abort();
@@ -811,6 +844,10 @@ void DownloadTask::startSingleDownload()
         return;
     }
     
+    // 初始化停滞检测
+    m_lastProgressBytes = 0;
+    m_lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+    
     // 打开文件
     m_file = new QFile(m_savePath);
     if (!m_file->open(QIODevice::WriteOnly)) {
@@ -838,6 +875,11 @@ void DownloadTask::startSingleDownload()
             m_file->write(m_reply->readAll());
         }
     });
+    
+    // 启动停滞检查定时器（每5秒检查一次）
+    if (m_stallTimer) {
+        m_stallTimer->start(5000);
+    }
 }
 
 void DownloadTask::startSegmentedDownload()
@@ -867,7 +909,7 @@ void DownloadTask::startSegmentedDownload()
         
         QString segmentPath = m_savePath + QString(".part%1").arg(i);
         
-        auto segment = new SegmentDownloader(i, m_url, segmentPath, start, end, m_timeout, this);
+        auto segment = new SegmentDownloader(i, m_url, segmentPath, start, end, m_timeout, m_stallTimeout, this);
         connect(segment, &SegmentDownloader::finished, this, &DownloadTask::onSegmentFinished);
         connect(segment, &SegmentDownloader::error, this, &DownloadTask::onSegmentError);
         connect(segment, &SegmentDownloader::progress, this, &DownloadTask::onSegmentProgress);
@@ -875,9 +917,18 @@ void DownloadTask::startSegmentedDownload()
         m_segments.append(segment);
     }
     
+    // 初始化停滞检测
+    m_lastProgressBytes = 0;
+    m_lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+    
     // 启动所有分段下载
     for (auto segment : m_segments) {
         segment->start();
+    }
+    
+    // 启动停滞检查定时器（每5秒检查一次）
+    if (m_stallTimer) {
+        m_stallTimer->start(5000);
     }
 }
 
@@ -885,6 +936,10 @@ void DownloadTask::onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal)
 {
     QMutexLocker locker(&m_mutex);
     m_downloadedSize = bytesReceived;
+    
+    // 更新停滞检测的进度信息
+    m_lastProgressBytes = bytesReceived;
+    m_lastProgressTime = QDateTime::currentMSecsSinceEpoch();
     
     if (bytesTotal > 0) {
         m_fileSize = bytesTotal;
@@ -901,6 +956,11 @@ void DownloadTask::onDownloadFinished()
     }
     
     QMutexLocker locker(&m_mutex);
+    
+    // 停止停滞检查定时器
+    if (m_stallTimer) {
+        m_stallTimer->stop();
+    }
     
     if (m_reply->error() != QNetworkReply::NoError) {
         m_errorString = m_reply->errorString();
@@ -998,13 +1058,63 @@ void DownloadTask::onSegmentProgress(int segmentIndex, qint64 bytesReceived, qin
     
     m_downloadedSize = totalReceived;
     
+    // 更新停滞检测的进度信息
+    m_lastProgressBytes = totalReceived;
+    m_lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+    
     locker.unlock();
     emit progress(m_taskId, totalReceived, m_fileSize);
+}
+
+void DownloadTask::onStallCheck()
+{
+    QMutexLocker locker(&m_mutex);
+    
+    // 检查是否已取消或暂停
+    if (m_isCanceled || m_isPaused) {
+        return;
+    }
+    
+    qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+    qint64 timeSinceLastProgress = currentTime - m_lastProgressTime;
+    
+    // 如果超过停滞超时时间仍无进度，则视为停滞
+    if (timeSinceLastProgress > m_stallTimeout) {
+        qint64 currentBytes = m_downloadedSize;
+        
+        // 确认确实没有新数据
+        if (currentBytes == m_lastProgressBytes) {
+            m_errorString = QString("Download stalled: no progress for %1 seconds").arg(m_stallTimeout / 1000);
+            
+            // 停止定时器
+            if (m_stallTimer) {
+                m_stallTimer->stop();
+            }
+            
+            // 取消当前连接
+            if (m_reply) {
+                m_reply->abort();
+            }
+            
+            // 取消所有分段
+            for (auto segment : m_segments) {
+                segment->cancel();
+            }
+            
+            locker.unlock();
+            emit failed(m_taskId, m_errorString);
+        }
+    }
 }
 
 void DownloadTask::mergeSegments()
 {
     QMutexLocker locker(&m_mutex);
+    
+    // 停止停滞检查定时器
+    if (m_stallTimer) {
+        m_stallTimer->stop();
+    }
     
     // 打开目标文件
     QFile outFile(m_savePath);
@@ -1047,7 +1157,7 @@ void DownloadTask::mergeSegments()
 // ==================== SegmentDownloader 实现 ====================
 
 SegmentDownloader::SegmentDownloader(int index, const QUrl &url, const QString &filePath,
-                                   qint64 start, qint64 end, int timeout, QObject *parent)
+                                   qint64 start, qint64 end, int timeout, int stallTimeout, QObject *parent)
     : QObject(parent)
     , m_index(index)
     , m_url(url)
@@ -1055,11 +1165,15 @@ SegmentDownloader::SegmentDownloader(int index, const QUrl &url, const QString &
     , m_start(start)
     , m_end(end)
     , m_bytesReceived(0)
+    , m_lastProgressBytes(0)
+    , m_lastProgressTime(0)
     , m_timeout(timeout)
+    , m_stallTimeout(stallTimeout)
     , m_networkManager(nullptr)
     , m_reply(nullptr)
     , m_file(nullptr)
     , m_ownsNetworkManager(false)
+    , m_stallTimer(nullptr)
     , m_isCanceled(false)
 {
     // 尝试从DownloadTask的父对象（AsulMultiDownloader）获取共享的网络管理器
@@ -1077,6 +1191,11 @@ SegmentDownloader::SegmentDownloader(int index, const QUrl &url, const QString &
         m_networkManager = new QNetworkAccessManager(this);
         m_ownsNetworkManager = true;
     }
+    
+    // 创建停滞检查定时器
+    m_stallTimer = new QTimer(this);
+    m_stallTimer->setSingleShot(false);
+    connect(m_stallTimer, &QTimer::timeout, this, &SegmentDownloader::onStallCheck);
 }
 
 SegmentDownloader::~SegmentDownloader()
@@ -1093,6 +1212,10 @@ void SegmentDownloader::start()
     if (m_isCanceled) {
         return;
     }
+    
+    // 初始化停滞检测
+    m_lastProgressBytes = 0;
+    m_lastProgressTime = QDateTime::currentMSecsSinceEpoch();
     
     // 打开文件
     m_file = new QFile(m_filePath);
@@ -1116,11 +1239,21 @@ void SegmentDownloader::start()
     connect(m_reply, &QNetworkReply::finished, this, &SegmentDownloader::onFinished);
     connect(m_reply, QOverload<QNetworkReply::NetworkError>::of(&QNetworkReply::errorOccurred),
             this, &SegmentDownloader::onError);
+    
+    // 启动停滞检查定时器（每5秒检查一次）
+    if (m_stallTimer) {
+        m_stallTimer->start(5000);
+    }
 }
 
 void SegmentDownloader::cancel()
 {
     m_isCanceled = true;
+    
+    // 停止停滞检查定时器
+    if (m_stallTimer) {
+        m_stallTimer->stop();
+    }
     
     if (m_reply) {
         m_reply->abort();
@@ -1145,6 +1278,10 @@ void SegmentDownloader::onReadyRead()
     m_file->write(data);
     m_bytesReceived += data.size();
     
+    // 更新停滞检测的进度信息
+    m_lastProgressBytes = m_bytesReceived;
+    m_lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+    
     qint64 total = m_end - m_start + 1;
     emit progress(m_index, m_bytesReceived, total);
 }
@@ -1153,6 +1290,11 @@ void SegmentDownloader::onFinished()
 {
     if (!m_reply) {
         return;
+    }
+    
+    // 停止停滞检查定时器
+    if (m_stallTimer) {
+        m_stallTimer->stop();
     }
     
     if (m_reply->error() != QNetworkReply::NoError) {
@@ -1196,6 +1338,11 @@ void SegmentDownloader::onError(QNetworkReply::NetworkError errorCode)
         return;
     }
     
+    // 停止停滞检查定时器
+    if (m_stallTimer) {
+        m_stallTimer->stop();
+    }
+    
     QString errorString = m_reply->errorString();
     
     if (m_file) {
@@ -1206,6 +1353,41 @@ void SegmentDownloader::onError(QNetworkReply::NetworkError errorCode)
     }
     
     emit error(m_index, errorString);
+}
+
+void SegmentDownloader::onStallCheck()
+{
+    // 检查是否已取消
+    if (m_isCanceled) {
+        return;
+    }
+    
+    qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+    qint64 timeSinceLastProgress = currentTime - m_lastProgressTime;
+    
+    // 如果超过停滞超时时间仍无进度，则视为停滞
+    if (timeSinceLastProgress > m_stallTimeout) {
+        qint64 currentBytes = m_bytesReceived;
+        
+        // 确认确实没有新数据
+        if (currentBytes == m_lastProgressBytes) {
+            QString errorString = QString("Segment %1 stalled: no progress for %2 seconds")
+                                    .arg(m_index)
+                                    .arg(m_stallTimeout / 1000);
+            
+            // 停止定时器
+            if (m_stallTimer) {
+                m_stallTimer->stop();
+            }
+            
+            // 取消当前连接
+            if (m_reply) {
+                m_reply->abort();
+            }
+            
+            emit error(m_index, errorString);
+        }
+    }
 }
 
 // ==================== PCL优化：监控和动态调度实现 ====================
